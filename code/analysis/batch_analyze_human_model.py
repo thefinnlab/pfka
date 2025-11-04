@@ -18,21 +18,21 @@ N_NODES = 1
 N_TASKS_PER_NODE = 1
 N_TASKS = 1
 CPUS_PER_TASK = 8
-MEM_PER_CPU = '8G'
+MEM_PER_CPU = '32G'
 
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
 
     # type of analysis we're running --> linked to the name of the regressors
+    parser.add_argument('-t', '--task', type=str, nargs='+', default=['black', 'wheretheressmoke', 'howtodraw'])
     parser.add_argument('-careful_whisper', '--careful_whisper', type=int, default=0)
+    parser.add_argument('-drop_shortened', '--drop_shortened', type=int, default=0)
     parser.add_argument('-o', '--overwrite', type=int, default=0)
     p = parser.parse_args()
 
-    task_list = ['black', 'wheretheressmoke', 'howtodraw'] # black
-    window_sizes = [25]
-
     # model_names = sorted(CLM_MODELS_DICT.keys())
+    window_sizes = [25]
     # window_sizes = [
     #     2, 3, 4, 5, 10, 50, 75, 125, 150, 175, 200, 225, 250, 275, 300
     # ]
@@ -43,7 +43,7 @@ if __name__ == '__main__':
 
     # get all MLM models except BERT
     if p.careful_whisper:
-        models = sorted(glob.glob(os.path.join(BASE_DIR, f'derivatives/model-predictions/{task_list[0]}/careful-whisper/*')))
+        models = sorted(glob.glob(os.path.join(BASE_DIR, f'derivatives/model-predictions/{p.task[0]}/careful-whisper/*')))
         models = [os.path.basename(model) for model in models]
         model_names = ' '.join(models)
 
@@ -53,6 +53,11 @@ if __name__ == '__main__':
         MLM_MODELS = list(MLM_MODELS_DICT.keys())[1:]
         CLM_MODELS = list(CLM_MODELS_DICT.keys()) 
         model_names = CLM_MODELS + MLM_MODELS
+        # model_names = ' '.join(model_names)
+
+        remove_models = ['qwen3-8B', 'llama3.1-8B']
+        # remove_models = ['qwen3-32B', 'qwen3-8B', 'llama3.1-8B', 'llama3.1-70B', 'gemma3-1b-pt']
+        model_names = [model for model in model_names if model not in remove_models]
         model_names = ' '.join(model_names)
 
         print (f'Loading the following models')
@@ -65,13 +70,13 @@ if __name__ == '__main__':
     job_string = f'{DSQ_MODULES} srun python {script_fn}'
     job_num = 0
 
-    for i, (task, window_size) in enumerate(product(task_list, window_sizes)):
+    for i, (task, window_size) in enumerate(product(p.task, window_sizes)):
 
         # if i not in failed_jobs:
         #     continue
 
         cmd = ''.join([
-            f"{job_string} -t {task} -m {model_names} -careful_whisper {p.careful_whisper} -window_size {window_size} -o {p.overwrite}"
+            f"{job_string} -t {task} -m {model_names} -careful_whisper {p.careful_whisper} -window_size {window_size} -drop_shortened {p.drop_shortened} -o {p.overwrite}"
         ])
 
         all_cmds.append(cmd)

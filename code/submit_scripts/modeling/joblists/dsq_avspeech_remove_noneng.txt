@@ -1,1 +1,0 @@
-module load cuda/11.2; module load openmpi; module load workbench/1.50; source /optnfs/common/miniconda3/etc/profile.d/conda.sh; conda activate prosody;  sleep 0; python voxceleb2_remove_noneng.py --dataset avspeech --text_model gpt2  --audio_model wav2vec2  --video_model data2vec  --num_jobs=16 --current_shard 0 --num_shards 1

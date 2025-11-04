@@ -26,7 +26,8 @@ dependencies:
   - pip
   - statsmodels
   - huggingface_hub
-  - transformers=4.35.0
+  - transof
+  - transformers>=4.51.0
   - scikit-learn
   - scipy
   - matplotlib

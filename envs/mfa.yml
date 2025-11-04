@@ -1,0 +1,21 @@
+# environment.yml
+name: mfa
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - pytorch
+  - montreal-forced-aligner
+  - torchvision
+  - torchaudio
+  - numpy
+  - scipy
+  - pandas==1.5.3
+  - tqdm
+  - pip
+  - pip:
+    - datasets
+    - praatio
+    - soundfile
+    - argparse

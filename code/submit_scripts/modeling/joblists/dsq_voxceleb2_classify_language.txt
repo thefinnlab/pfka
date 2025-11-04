@@ -1,1 +1,0 @@
-module load cuda/11.2; module load openmpi; module load workbench/1.50; source /optnfs/common/miniconda3/etc/profile.d/conda.sh; conda activate prosody;  python classify_voxceleb2.py --base_dir /dartfs/rc/lab/F/FinnLab/datasets/nlp-datasets/voxceleb2/ --num_shards 10 --current_shard 0; 

@@ -1,1 +1,0 @@
-module load cuda/11.2; module load openmpi; module load workbench/1.50; source /optnfs/common/miniconda3/etc/profile.d/conda.sh; conda activate prosody;  python make_metadata_subsets.py --d lrs3 voxceleb2 --text_model gpt2  --audio_model wav2vec2  --video_model data2vec  --overwrite 0; 

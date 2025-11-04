@@ -54,6 +54,7 @@ if __name__ == '__main__':
     parser.add_argument('-word_model', '--word_model_name', type=str, default='fasttext')
     parser.add_argument('-window_size', '--window_size', type=int, default=25)
     parser.add_argument('-careful_whisper', '--careful_whisper', type=int, default=0)
+    parser.add_argument('-drop_shortened', '--drop_shortened', type=int, default=0)
     parser.add_argument('-o', '--overwrite', type=int, default=0)
     p = parser.parse_args()
 
@@ -65,7 +66,13 @@ if __name__ == '__main__':
     ###############################################
 
     # Sourced for aggregating data across subjects
-    results_dir = os.path.join(BASE_DIR, 'derivatives/results/behavioral/')
+    if p.drop_shortened:
+        results_dir = os.path.join(BASE_DIR, 'derivatives/results/behavioral-shortened-removed/')
+    else:
+        results_dir = os.path.join(BASE_DIR, 'derivatives/results/behavioral/')
+
+    utils.attempt_makedirs(results_dir)
+
     preproc_dir = os.path.join(BASE_DIR, 'stimuli/preprocessed')
     models_dir = os.path.join(BASE_DIR, 'derivatives/model-predictions')
     logits_dir = models_dir.replace(BASE_DIR, BASE_DIR)
@@ -75,7 +82,7 @@ if __name__ == '__main__':
     ###############################################
 
     # Load transcript --> use the version that we include prosody values within
-    df_transcript = pd.read_csv(os.path.join(preproc_dir, p.task, f'{p.task}_transcript-selected_prosody.csv'))
+    df_transcript = pd.read_csv(os.path.join(preproc_dir, p.task, f'{p.task}_transcript-selected_prosody-syntax.csv'))
     df_transcript = df_transcript.rename(columns={'Word_Written': 'word', 'Punctuation': 'punctuation'})
 
     # Need to load the preprocessed transcript that has all words to get the model quadrants
@@ -91,6 +98,13 @@ if __name__ == '__main__':
     # Add in the additional columns
     additional_prosody_columns = [f"{col}_mean_words{n_words}" for col in prosody_columns for n_words in N_WORDS_PROSODY]
     prosody_columns += additional_prosody_columns
+
+    # Add in the past n word prosody and boundary columns
+    prosody_columns += [f"prominence_{i+1}" for i in range(max(N_WORDS_PROSODY))]
+    prosody_columns += [f"boundary_{i+1}" for i in range(max(N_WORDS_PROSODY))]
+
+    # Add in part of speech + syntax info
+    prosody_columns += ["POS", "POS_spaCy", "Dep", "Head", "Clause_ID", "Clause_Pos"]
 
     # select the columns that we want to save out for gross-comparison
     combined_columns = [
@@ -117,7 +131,7 @@ if __name__ == '__main__':
     out_fn = os.path.join(results_dir, f'task-{p.task}_group-analyzed-behavior_human.csv')
 
     if not os.path.exists(out_fn) or p.overwrite:
-        df_analyzed_results = analysis.analyze_human_results(df_transcript, df_results, word_model_info, window_size=p.window_size, top_n=None, drop_rt=None)
+        df_analyzed_results = analysis.analyze_human_results(df_transcript, df_results, word_model_info, window_size=p.window_size, top_n=None, drop_rt=None, drop_shortened=p.drop_shortened)
 
         # Add wrong phoneme info
         df_analyzed_results = add_wrong_phoneme_info(df_results, df_analyzed_results)
@@ -165,7 +179,7 @@ if __name__ == '__main__':
     out_fn = os.path.join(results_dir, f'task-{p.task}_group-analyzed-behavior_human-lemmatized.csv')
     
     if not os.path.exists(out_fn) or p.overwrite:
-        df_analyzed_lemmatized = analysis.analyze_human_results(df_transcript, df_lemmatized_results, word_model_info, window_size=p.window_size, top_n=None, drop_rt=None)
+        df_analyzed_lemmatized = analysis.analyze_human_results(df_transcript, df_lemmatized_results, word_model_info, window_size=p.window_size, top_n=None, drop_rt=None, drop_shortened=p.drop_shortened)
 
         # Add wrong phoneme info
         df_analyzed_results = add_wrong_phoneme_info(df_lemmatized_results, df_analyzed_lemmatized)

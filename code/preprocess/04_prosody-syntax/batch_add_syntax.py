@@ -6,49 +6,39 @@ import argparse
 from itertools import product
 import subprocess
 
-sys.path.append('../utils/')
+sys.path.append('../../utils/')
 
 from config import *
 import dataset_utils as utils
 
-PARTITION = 'standard'
+PARTITION = 'preemptable'
 TIME = '12:00:00'
 N_NODES = 1
 N_TASKS_PER_NODE = 1
 N_TASKS = 1
-CPUS_PER_TASK = 2
-MEM_PER_CPU = '4G'
-
-EXPERIMENT_VERSION = {
-	'black': 'pilot-multimodal-01',
-	'wheretheressmoke': 'final-multimodal-01',
-	'howtodraw': 'final-multimodal-01',
-}
+CPUS_PER_TASK = 1
+MEM_PER_CPU = '8G'
 
 if __name__ == '__main__':
 
-	parser = argparse.ArgumentParser()
-	parser.add_argument('-t', '--task', type=str, nargs='+', default=['black', 'wheretheressmoke', 'howtodraw'])
-	parser.add_argument('-modalities', '--modalities', type=str, nargs='+', default=['video', 'audio', 'text'])
-	parser.add_argument('-drop_shortened', '--drop_shortened', type=int, default=0)
-	p = parser.parse_args()
+	task_list = ['black', 'wheretheressmoke', 'howtodraw']
 
 	# grab the tasks
 	all_cmds = []
-	script_fn = os.path.join(os.getcwd(), 'run_compile_human_data.py')
-	job_string = f"{DSQ_MODULES.replace('asynchrony', 'dark_matter')} srun python {script_fn}"
+	script_fn = os.path.join(os.getcwd(), 'run_add_syntax.py')
+	job_string = f'{DSQ_MODULES} srun python {script_fn}'
 	job_num = 0
 
-	for i, task in enumerate(p.task):
+	for i, task in enumerate(task_list):
 
 		cmd = ''.join([
-			f"{job_string} -t {task} -v {EXPERIMENT_VERSION[task]} -modality_list {' '.join(p.modalities)} -drop_shortened {p.drop_shortened}"
+			f"{job_string} -t {task}"
 		])
 
 		all_cmds.append(cmd)
 		job_num += 1
 
-	dsq_base_string = f'dsq_compile_human_data'
+	dsq_base_string = f'dsq_add_syntax'
 	logs_dir = os.path.join(BASE_DIR, 'derivatives/logs/behavioral/')
 	dsq_dir =  os.path.join(BASE_DIR, 'code/submit_scripts/behavioral/dsq')
 	joblists_dir = os.path.join(BASE_DIR, 'code/submit_scripts/behavioral/joblists')
@@ -57,7 +47,7 @@ if __name__ == '__main__':
 	utils.attempt_makedirs(dsq_dir)
 	utils.attempt_makedirs(joblists_dir)
 
-	joblist_fn = os.path.join(joblists_dir, f'run_compile_human_data.txt')
+	joblist_fn = os.path.join(joblists_dir, f'run_add_syntax.txt')
 
 	with open(joblist_fn, 'w') as f:
 		for cmd in all_cmds:

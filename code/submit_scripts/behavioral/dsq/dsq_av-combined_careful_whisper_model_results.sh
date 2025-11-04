@@ -1,9 +1,0 @@
-#!/bin/bash
-#SBATCH --output /dartfs/rc/lab/F/FinnLab/tommy/isc_asynchrony_behavior/derivatives/logs/behavioral/dsq_av-combined_careful_whisper_model_results/dsq_av-combined_careful_whisper_model_results-%A_%1a-%N.txt
-#SBATCH --array 0-3
-#SBATCH --job-name dsq-av-combined_run_careful_whisper_results
-#SBATCH --partition=preemptable --time=12:00:00 --account=dbic --nodes=1 --ntasks-per-node=1 --ntasks=1 --exclude=q04 --cpus-per-task=8 --mem-per-cpu=8G
-
-# DO NOT EDIT LINE BELOW
-/optnfs/common/dSQ/dSQ-1.05/dSQBatch.py --job-file /dartfs/rc/lab/F/FinnLab/tommy/isc_asynchrony_behavior/code/submit_scripts/behavioral/joblists/av-combined_run_careful_whisper_results.txt --status-dir /dartfs/rc/lab/F/FinnLab/tommy/isc_asynchrony_behavior/derivatives/logs/behavioral/dsq_av-combined_careful_whisper_model_results
-

@@ -26,6 +26,7 @@ if __name__ == '__main__':
     parser.add_argument('-t', '--task', type=str)
     parser.add_argument('-v', '--experiment_version', type=str)
     parser.add_argument('-modality_list', '--modality_list', type=str, nargs='+', default=['video','audio', 'text'])
+    parser.add_argument('-drop_shortened', '--drop_shortened', type=int, default=0)
     parser.add_argument('-o', '--overwrite', type=int, default=0)
     p = parser.parse_args()
 
@@ -37,7 +38,11 @@ if __name__ == '__main__':
     results_dir = os.path.join(BASE_DIR, 'experiments',  EXPERIMENT_NAME, 'cleaned-results', p.experiment_version)
     preproc_dir = os.path.join(BASE_DIR, 'stimuli/preprocessed')
     audio_dir = os.path.join(BASE_DIR, 'stimuli/cut_audio/', p.experiment_version)
-    behavioral_dir = os.path.join(BASE_DIR, 'derivatives/results/behavioral/') # where we will write our data
+    
+    if p.drop_shortened:
+        behavioral_dir = os.path.join(BASE_DIR, 'derivatives/results/behavioral-shortened-removed/')
+    else:
+        behavioral_dir = os.path.join(BASE_DIR, 'derivatives/results/behavioral/') # where we will write our data
 
     utils.attempt_makedirs(behavioral_dir)
 
@@ -46,7 +51,7 @@ if __name__ == '__main__':
     ###############################################
 
     # Load transcript --> use the version that we include prosody values within
-    df_transcript = pd.read_csv(os.path.join(preproc_dir, p.task, f'{p.task}_transcript-selected_prosody.csv'))
+    df_transcript = pd.read_csv(os.path.join(preproc_dir, p.task, f'{p.task}_transcript-selected_prosody-syntax.csv'))
     df_transcript = df_transcript.rename(columns={'Word_Written': 'word', 'Punctuation': 'punctuation'})
 
     prosody_columns = [
@@ -58,6 +63,13 @@ if __name__ == '__main__':
     # Add in the additional columns
     additional_prosody_columns = [f"{col}_mean_words{n_words}" for col in prosody_columns for n_words in N_WORDS_PROSODY]
     prosody_columns += additional_prosody_columns
+
+    # Add in the past n word prosody and boundary columns
+    prosody_columns += [f"prominence_{i+1}" for i in range(max(N_WORDS_PROSODY))]
+    prosody_columns += [f"boundary_{i+1}" for i in range(max(N_WORDS_PROSODY))]
+
+    # Add in part of speech + syntax info
+    prosody_columns += ["POS", "POS_spaCy", "Dep", "Head", "Clause_ID", "Clause_Pos"]
 
     ########################################################
     #### Aggregate results across audio/text modalities ####
