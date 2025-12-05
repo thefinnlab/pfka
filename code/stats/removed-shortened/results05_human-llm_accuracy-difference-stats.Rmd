@@ -1,0 +1,185 @@
+---
+title: "Shortened Removed: results05_human-llm_accuracy-difference-stats"
+author: "Tommy Botch"
+date: "2025-10-02"
+output: html_document
+---
+
+# Setup environment
+
+## Load packages and setup paths for analysis
+
+Set up directories - since we're doing this locally (and mounting the server), 
+we're going to use a different base_dir
+
+```{r setup, include=FALSE}
+
+# Source the utils.R file to load the functions
+source("../utils/utils.R")
+
+# Load required and additional packages
+install_and_load()
+
+# Set the paths for this notebook
+set_paths(analysis_name="behavioral-shortened-removed", plots_name="human-llm-comparison-shortened-removed")
+```
+
+# Human-LLM accuracy analyses
+
+## Data loading
+
+Load data and set factors. Our columns are the following:
+- **modality:** which modality was the stimulus presented as (video, audio, text, or model name) 
+- **word_index:** the word index within the story
+- **task:** which of the three stories was the data from (black, wheretheressmoke, howtodraw)
+
+We create a contrast of modality such that we test the hypothesis that multimodal (video) > spoken (audio) > written (text).
+
+```{r}
+
+results_fn <- file.path(results_dir, "all-task_group-analyzed-behavior_window-size-00025_human-model-distributions-lemmatized.csv")
+
+# Load data and convert columns to factors
+df_results <- load_and_prepare_data(
+  file_path=results_fn,
+  factor_columns=c('modality', 'model_name', 'word_index', 'task', "Clause_Pos", "Clause_ID", "POS_spaCy")
+)
+
+# ADD A COLUMN THAT GROUPS HUMANS/MODELS
+df_results <- df_results %>%
+  mutate(model_type = case_when(
+    model_name %in% c('roberta', 'electra', 'xlm-prophetnet') ~ "mlm",
+    TRUE ~ "clm"  # Default case
+  ))
+
+# Set the levels for the modality column
+df_results <- set_factor_levels(
+  df=df_results,
+  column_name="modality",
+  levels=c("video", "audio", "text")
+)
+
+df_results <- create_column_contrast(
+  df=df_results, 
+  column_name="modality",
+  n_poly=2
+)
+
+colnames(df_results)
+```
+
+## Analysis 1A - Human-LLM accuracy difference
+
+```{r}
+
+accuracy_diff_formula <- 'human_model_accuracy_diff ~  modality * model_entropy + (1|model_name) + (1|word_index:task)'
+
+# Fit the linear mixed-effects model
+model <- lmer(
+  accuracy_diff_formula, 
+  data=df_results, 
+)
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
+### Plot model results
+
+```{r}
+
+preds <- data.frame(get_model_data(model, type='pred', terms = c("model_entropy", "modality")))
+
+colors <- c('#F068A1', '#82C564', '#F7CD84')
+
+ggplot(preds, aes(x=x, y=predicted, color=group)) +
+  geom_point(
+    data = df_results,
+    aes(x=model_entropy, y=human_model_accuracy_diff, color=modality),
+    stroke=1,
+    alpha=0.035) +
+  geom_line(size=1) +
+  geom_ribbon(aes(ymin=conf.low, ymax=conf.high, fill=group), alpha=0.3, color=NA) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", size = 1) +
+  theme(
+    aspect.ratio = 16/9,
+    axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank()
+  ) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  labs(
+    x = "Model Entropy",
+    y = "Accuracy Difference",
+    title = "Difference of human and model accuracy")
+
+# ggsave(file.path(plots_dir, 'human-llm_accuracy-difference-entropy_new.pdf'), device = "pdf")
+
+```
+
+## Analysis 1B - Prosody interaction with accuracy difference
+
+```{r}
+
+accuracy_diff_formula <- 'human_model_accuracy_diff ~ modality * prominence_mean_words5 * model_entropy + (1|model_name) + (1|word_index:task)'
+
+# Fit the linear mixed-effects model
+model <- lmer(
+  accuracy_diff_formula, 
+  data=df_results, 
+)
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
+### Plot the interaction with prosody
+
+```{r}
+
+preds <- data.frame(get_model_data(model, type='pred', terms = c("prominence_mean_words5", "modality")))
+colors <- c('#F068A1', '#82C564', '#F7CD84')
+
+ggplot(preds, aes(x=x, y=predicted, color=group)) + 
+  geom_point(
+    data = df_results, 
+    aes(x=prominence_mean_words5, y=human_model_accuracy_diff, color=modality), 
+    stroke=1,
+    alpha=0.035) +
+  geom_line(size=1) + 
+  geom_ribbon(aes(ymin=conf.low, ymax=conf.high, fill=group), alpha=0.3, color=NA) + 
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", size = 1) +
+  theme(
+    aspect.ratio = 5/4,
+    axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank()
+  ) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  labs(
+    x = "Prosodic Prominence",
+    y = "Accuracy Difference",
+    title = "Prosody drives difference of human and LLM accuracy ") 
+
+# ggsave(file.path(plots_dir, 'human-llm_accuracy-difference-prosody-interaction_new.pdf'), device = "pdf")
+```

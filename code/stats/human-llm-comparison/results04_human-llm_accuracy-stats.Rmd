@@ -1,0 +1,473 @@
+---
+title: "results04_human-llm_accuracy-stats"
+author: "Tommy Botch"
+date: "2025-10-02"
+output: html_document
+---
+
+# Setup environment
+
+## Load packages and setup paths for analysis
+
+Set up directories - since we're doing this locally (and mounting the server), 
+we're going to use a different base_dir
+
+```{r setup, include=FALSE}
+
+# Source the utils.R file to load the functions
+source("../utils/utils.R")
+
+# Load required and additional packages
+install_and_load()
+
+# Set the paths for this notebook
+set_paths(analysis_name="behavioral", plots_name="human-llm-comparison")
+```
+
+# Human-LLM accuracy analyses
+
+## Data loading
+
+Load data and set factors. Our columns are the following:
+- **modality:** which modality was the stimulus presented as (video, audio, text, or model name) 
+- **word_index:** the word index within the story
+- **task:** which of the three stories was the data from (black, wheretheressmoke, howtodraw)
+
+We create a contrast of modality such that we test the hypothesis that multimodal (video) > spoken (audio) > written (text).
+
+```{r}
+
+results_fn <- file.path(results_dir, "all-task_group-analyzed-behavior_window-size-00025_human-model-lemmatized.csv")
+
+# Load data and convert columns to factors
+df_results <- load_and_prepare_data(
+  file_path=results_fn,
+  factor_columns=c('modality', 'word_index', 'task', "Clause_Pos", "Clause_ID", "POS_spaCy", "ground_truth")
+)
+
+# ADD A COLUMN THAT GROUPS HUMANS/MODELS
+df_results <- df_results %>%
+  mutate(model_type = case_when(
+    modality %in% c("video") ~ "video",
+    modality %in% c("audio") ~ "audio",
+    modality %in% c("text") ~ "text",
+    modality %in% c('roberta', 'electra', 'xlm-prophetnet') ~ "mlm",
+    TRUE ~ "clm"  # Default case
+  ))
+
+# Set the levels for the modality column
+df_results <- set_factor_levels(
+  df=df_results,
+  column_name="model_type",
+  levels=c("video", "audio", "text", "clm", "mlm")
+)
+
+df_results <- create_column_contrast(
+  df=df_results, 
+  column_name="model_type",
+  n_poly=2
+)
+
+```
+
+## Analysis 1A - Binary accuracy
+
+We first investigate whether humans exhibit an advantage of binary accuracy (0/1) over LLMs based on the modality of the stimulus. We use a logistic mixed-effects model to classify accuracy based on modality.
+
+```{r}
+
+binary_accuracy_formula <- 'accuracy ~ model_type + (1|modality) + (1|word_index:task)'
+
+# Fit the logistic mixed-effects model
+model <- glmer(
+  binary_accuracy_formula, 
+  data=df_results, 
+  family=binomial(link="logit")
+)
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ model_type)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+## Analysis 1B - Task-level comparisons
+
+```{r}
+
+binary_accuracy_formula <- 'accuracy ~ model_type + (1|modality) + (1|word_index)'
+
+```
+
+### Story = Black
+
+```{r}
+
+model <- lmer_task(
+  task_name='black', 
+  df=df_results, 
+  formula=binary_accuracy_formula,
+  family=binomial(link="logit")
+)
+
+# Output the results
+tab_model(model, show.se = TRUE, show.stat = TRUE, show.r2 = TRUE, show.df=TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ model_type)
+display_pairwise_comparisons(pairwise_comparisons)
+```
+
+### Story = Smoke
+
+```{r}
+
+model <- lmer_task(
+  task_name='wheretheressmoke', 
+  df=df_results, 
+  formula=binary_accuracy_formula,
+  family=binomial(link="logit")
+)
+
+# Output the results
+tab_model(model, show.se = TRUE, show.stat = TRUE, show.r2 = TRUE, show.df=TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ model_type)
+display_pairwise_comparisons(pairwise_comparisons)
+```
+
+### Story = Draw
+
+```{r}
+
+model <- lmer_task(
+  task_name='howtodraw', 
+  df=df_results, 
+  formula=binary_accuracy_formula,
+  family=binomial(link="logit")
+)
+
+# Output the results
+tab_model(model, show.se = TRUE, show.stat = TRUE, show.r2 = TRUE, show.df=TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ model_type)
+display_pairwise_comparisons(pairwise_comparisons)
+```
+
+## Analysis 2A - Continuous accuracy
+
+```{r}
+
+continuous_accuracy_formula <- 'fasttext_top_word_accuracy ~ model_type + (1|modality) + (1|word_index:task)'
+
+# Fit the logistic mixed-effects model
+model <- lmer(
+  continuous_accuracy_formula, 
+  data=df_results, 
+)
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ model_type)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
+## Analysis 2B - Task-level comparisons
+
+```{r}
+
+continuous_accuracy_formula <- 'fasttext_top_word_accuracy ~ model_type + (1|modality) + (1|word_index)'
+
+```
+
+### Story = Black
+
+```{r}
+
+model <- lmer_task(
+  task_name='black', 
+  df=df_results, 
+  formula=continuous_accuracy_formula,
+)
+
+# Output the results
+tab_model(model, show.se = TRUE, show.stat = TRUE, show.r2 = TRUE, show.df=TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ model_type)
+display_pairwise_comparisons(pairwise_comparisons)
+```
+
+### Story = Smoke
+
+```{r}
+
+model <- lmer_task(
+  task_name='wheretheressmoke', 
+  df=df_results, 
+  formula=continuous_accuracy_formula,
+)
+
+# Output the results
+tab_model(model, show.se = TRUE, show.stat = TRUE, show.r2 = TRUE, show.df=TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ model_type)
+display_pairwise_comparisons(pairwise_comparisons)
+```
+
+### Story = Draw
+
+```{r}
+
+model <- lmer_task(
+  task_name='howtodraw', 
+  df=df_results, 
+  formula=continuous_accuracy_formula,
+)
+
+# Output the results
+tab_model(model, show.se = TRUE, show.stat = TRUE, show.r2 = TRUE, show.df=TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ model_type)
+display_pairwise_comparisons(pairwise_comparisons)
+```
+
+## Analysis 2C - Continuous accuracy by quadrant
+
+```{r}
+
+# Create accuracy-entropy column removing any missing
+n_before <- nrow(df_results)
+
+df_accuracy_entropy <- df_results %>%
+  mutate(
+    accuracy_group = na_if(accuracy_group, ""),
+    entropy_group  = na_if(entropy_group, "")
+  ) %>%
+  drop_na(accuracy_group, entropy_group) %>%
+  mutate(accuracy_entropy_group = paste(accuracy_group, entropy_group, sep = "-"),
+         accuracy_entropy_group = factor(accuracy_entropy_group))
+
+n_after <- nrow(df_accuracy_entropy)
+cat("Rows dropped:", n_before - n_after, "\n")
+
+# Make factor
+df_accuracy_entropy <- convert_columns_to_factors(
+  df_accuracy_entropy,
+  c("accuracy_entropy_group")
+)
+
+# Set the levels for the modality column
+df_accuracy_entropy <- set_factor_levels(
+  df=df_accuracy_entropy,
+  column_name="accuracy_entropy_group",
+  levels=c("high-low", "high-high", "low-low", "low-high")
+)
+
+unique(df_accuracy_entropy$accuracy_entropy_group)
+
+df_accuracy_entropy <- create_column_contrast(
+  df=df_accuracy_entropy, 
+  column_name="accuracy_entropy_group",
+  n_poly=1
+)
+```
+
+Now run the dataframe through
+
+```{r}
+
+formula <- "fasttext_top_word_accuracy ~ accuracy_entropy_group * model_type + (1|modality) + (1|word_index)"
+
+# Fit the logistic mixed-effects model
+model <- lmer(
+  formula, 
+  data=df_accuracy_entropy, 
+)
+
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Estimated marginal means for model_type, conditional on accuracy_entropy_group = "high-low"
+emm_highlow <- emmeans(model, pairwise ~ model_type | accuracy_entropy_group)
+
+
+emm_highlow
+
+# Plot predicted values for interaction
+plot_model(model, type = "pred", terms = c("accuracy_entropy_group", "model_type"))
+```
+
+```{r}
+
+# Get estimated marginal means for the interaction
+emm <- emmeans(model, ~ accuracy_entropy_group * model_type)
+
+# Convert to data frame for plotting
+emm_df <- as.data.frame(emm)
+
+# Line plot
+ggplot(emm_df, aes(
+  x = accuracy_entropy_group, 
+  y = emmean, 
+  color = model_type, 
+  group = model_type
+)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  # geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), 
+  #               width = 0.1) +
+  theme_minimal() +
+  labs(
+    x = "Accuracy × Entropy group",
+    y = "Estimated probability of top word accuracy",
+    color = "Model type"
+  )
+
+```
+
+## Analysis 3A - Context window continuous accuracy
+
+Load results again
+
+```{r}
+results_fn <- file.path(results_dir, "all-task_group-analyzed-behavior_all-window-sizes_human-model-lemmatized.csv")
+
+# Load data and convert columns to factors
+df_results <- load_and_prepare_data(
+  file_path=results_fn,
+  factor_columns=c('modality', 'word_index', 'task')
+)
+
+# ADD A COLUMN THAT GROUPS HUMANS/MODELS
+df_results <- df_results %>%
+  mutate(model_type = case_when(
+    modality %in% c("video") ~ "video",
+    modality %in% c("audio") ~ "audio",
+    modality %in% c("text") ~ "text",
+    modality %in% c('roberta', 'electra', 'xlm-prophetnet') ~ "mlm",
+    TRUE ~ "clm"  # Default case
+  ))
+
+# Drop MLM rows
+df_results <- df_results %>%
+  filter(model_type != "mlm")
+
+
+# Set the levels for the modality column
+df_results <- set_factor_levels(
+  df=df_results,
+  column_name="model_type",
+  levels=c("video", "audio", "text", "clm") #, "mlm")
+)
+
+df_results <- create_column_contrast(
+  df=df_results,
+  column_name="model_type",
+  n_poly=3
+)
+# 
+# Set the levels for the modality column
+df_results <- set_factor_levels(
+  df=df_results,
+  column_name="modality",
+  levels=c("video", "audio", "text", "llama3.1-70B", "qwen3-32B", "mistral", "gpt2-xl", "gpt-neo-x", "gemma3-1b-pt", "llama2", "bloom", "gpt2", "roberta", "electra", "xlm-prophetnet")
+)
+
+
+# df_results <- create_column_contrast(
+#   df=df_results,
+#   column_name="modality",
+#   n_poly=4
+# )
+
+unique(df_results$modality)
+
+```
+
+Run analysis
+
+```{r}
+
+df_results$log_window <- log(df_results$window_size)
+
+continuous_accuracy_formula <- 'fasttext_top_word_accuracy ~ model_type * log_window + (1|modality) + (1|word_index:task)'
+
+# Fit the logistic mixed-effects model
+model <- lmer(
+  continuous_accuracy_formula, 
+  data=df_results, 
+  # family=gaussian(link="log")
+)
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+# Step 1: Define a grid of window sizes
+window_vals <- sort(unique(df_results$log_window))
+
+# Step 2: Compute predicted marginal means for each model_type at each window size
+emm <- emmeans(model, pairwise ~ model_type | log_window, at = list(log_window = window_vals))
+
+emm
+# Step 3: Convert emmeans output to a data frame
+pred_df <- as.data.frame(emm)
+AIC(model)
+
+# Line plot
+ggplot(pred_df, aes(
+  x = log_window, 
+  y = emmean, 
+  color = model_type, 
+  group = model_type
+)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  # geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), 
+  #               width = 0.1) +
+  theme_minimal() +
+  labs(
+    x = "Accuracy × Entropy group",
+    y = "Estimated probability of top word accuracy",
+    color = "Model type"
+  )
+
+
+```

@@ -1,0 +1,1 @@
+If doesn't run, make sure to go to utils/wavelet_prosody_toolkit/ and run pip install -e .[gui]

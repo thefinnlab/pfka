@@ -1,0 +1,381 @@
+---
+title: "results03_population-probability-stats"
+author: "Tommy Botch"
+date: "2024-11-15"
+output: html_document
+---
+
+# Setup environment
+
+## Load packages and setup paths for analysis
+
+Set up directories - since we're doing this locally (and mounting the server), 
+we're going to use a different base_dir
+
+```{r setup, include=FALSE}
+
+# Source the utils.R file to load the functions
+source("../utils/utils.R")
+
+# Load required and additional packages
+install_and_load()
+
+# Set the paths for this notebook
+set_paths(analysis_name="behavioral", plots_name="behavioral")
+```
+
+# Population-level analysis 
+
+## Data loading
+
+Load data and set factors. Our columns are the following:
+- **modality:** which modality was the stimulus presented as (video, audio, text) 
+- **ground_truth:** ground-truth word to be predicted
+- **top_pred:** most predicted word across the population
+- **word_index:** the word index within the story
+- **task:** which of the three stories was the data from (black, wheretheressmoke, howtodraw)
+
+We create a contrast of modality such that we test the hypothesis that multimodal (video) > spoken (audio) > written (text).
+
+```{r}
+
+results_fn <- file.path(results_dir, "all-task_group-analyzed-behavior_human-lemmatized.csv")
+
+# Load data and convert columns to factors
+df_results <- load_and_prepare_data(
+  file_path=results_fn,
+  factor_columns=c('modality', 'ground_truth', 'top_pred', 'word_index','task',"POS_spaCy", "Clause_Pos", "Clause_ID")
+)
+
+# Set the levels for the modality column
+df_results <- set_factor_levels(
+  df=df_results,
+  column_name="modality",
+  levels=c("video", "audio", "text")
+)
+
+df_results <- create_column_contrast(
+  df=df_results, 
+  column_name="modality",
+)
+```
+
+## Analysis 1A - Predictability
+
+We first investigate whether predictability (percentage of subjects predicting the correct word) varies based on the modality of the stimulus. We use a linear mixed-effects model with a log-link function, given that predictability is log distributed (e.g., floor is most common).
+
+```{r}
+
+predictability_formula <- 'predictability ~ modality + (1|word_index:task)'
+
+# Fit the logistic mixed-effects model
+model <- glmer(predictability_formula, data=df_results, family=gaussian(link='log'))
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
+## Analysis 1B - Predictability interaction with prosody
+
+```{r}
+
+predictability_formula <- 'predictability ~ modality * prominence_mean_words5 + (1|word_index:task)'
+
+# Fit the mixed-effects model
+model <- glmer(predictability_formula, data=df_results, family=gaussian(link='log'))
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+### Plot the interaction between predictability and prosody
+
+```{r}
+
+plot_model(model, type='pred', terms=c('prominence_mean_words5', 'modality'))
+
+```
+
+## Analysis 1C - Task-level comparisons
+
+```{r}
+
+predictability_formula <- 'predictability ~ modality + (1|word_index)'
+
+```
+
+Now conduct the comparisons for each task.
+
+### Story = Black
+
+```{r}
+
+model <- lmer_task(
+  task_name='black', 
+  df=df_results, 
+  formula=predictability_formula,
+  family=gaussian(link="log")
+)
+
+# Output the results
+tab_model(model, show.se = TRUE, show.stat = TRUE, show.r2 = TRUE)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+```
+
+### Story = Smoke
+
+```{r}
+
+model <- lmer_task(
+  task_name='wheretheressmoke', 
+  df=df_results, 
+  formula=predictability_formula,
+  family=gaussian(link="log")
+)
+
+# Output the results
+tab_model(model, show.se = TRUE, show.stat = TRUE, show.r2 = TRUE)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
+### Story = Draw
+
+```{r}
+
+model <- lmer_task(
+  task_name='howtodraw', 
+  df=df_results, 
+  formula=predictability_formula,
+  family=gaussian(link="log")
+)
+
+# Output the results
+tab_model(model, show.se = TRUE, show.stat = TRUE, show.r2 = TRUE)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+```
+
+## Analysis 2A - Entropy
+
+We next look at whether entropy of human prediction distributions varies based on condition.  
+
+```{r}
+
+entropy_formula <- 'entropy ~ modality + (1|word_index:task)'
+
+# Fit the logistic mixed-effects model
+model <- lmer(entropy_formula, data = df_results)
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
+
+## Analysis 2B - Entropy interaction with prosody
+
+Include prosody (prominence_mean) within the model as an interaction effect.
+
+```{r}
+
+entropy_formula <- 'entropy ~ modality * prominence_mean_words5 + (1|word_index:task)'
+
+# Fit the logistic mixed-effects model
+model <- lmer(entropy_formula, data = df_results)
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
+### Plot the interaction between prominence and entropy
+
+```{r}
+
+preds <- data.frame(get_model_data(model, type='pred', terms = c("prominence_mean_words5", "modality")))
+
+colors <- c('#F068A1', '#82C564', '#F7CD84')
+
+ggplot(preds, aes(x=x, y=predicted, color=group)) +
+  geom_point(
+    data = df_results,
+    aes(x=prominence_mean_words5, y=entropy, color=modality),
+    stroke=1,
+    alpha=0.1) +
+  geom_line(size=1) +
+  geom_ribbon(aes(ymin=conf.low, ymax=conf.high, fill=group), alpha=0.3, color=NA) +
+  theme(
+    aspect.ratio = 5/4,
+    axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank()
+  ) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  labs(
+    x = "Prosodic Prominence",
+    y = "Entropy",
+    title = "Prosody reduces entropy of prediction distributions")
+
+ggsave(file.path(plots_dir, 'human_entropy-prosody-interaction_new.pdf'), device = "pdf")
+```
+
+
+
+
+
+## Analysis 2C - Task-level comparisons
+
+```{r}
+
+entropy_formula <- 'entropy ~ modality + (1|word_index)'
+
+```
+
+Now conduct the comparisons for each task.
+
+### Story = Black
+
+```{r}
+
+model <- lmer_task(
+  task_name='black', 
+  df=df_results, 
+  formula=entropy_formula,
+)
+
+# Output the results
+tab_model(model, show.se = TRUE, show.stat = TRUE, show.r2 = TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+```
+
+### Story = Smoke
+
+```{r}
+
+model <- lmer_task(
+  task_name='wheretheressmoke', 
+  df=df_results, 
+  formula=entropy_formula,
+)
+
+# Output the results
+tab_model(model, show.se = TRUE, show.stat = TRUE, show.r2 = TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+```
+
+### Story = Draw
+
+```{r}
+
+model <- lmer_task(
+  task_name='howtodraw', 
+  df=df_results, 
+  formula=entropy_formula,
+)
+
+# Output the results
+tab_model(model, show.se = TRUE, show.stat = TRUE, show.r2 = TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
+## Supplementary Analysis - Leakage filtering 
+
+We now want to ensure that observed differences were not driven by confounding factors such as "leakage" of auditory input. We therefore filter for any instance where 
+
+```{r}
+
+df_results_filtered <- subset(df_results, !df_results$filter_for_leakage)
+
+```
+
+### Supplementary Analysis 1A - Predictability
+
+```{r}
+
+predictability_formula <- 'predictability ~ modality + (1|word_index:task)'
+
+# Fit the mixed-effects model
+model <- glmer(predictability_formula, data=df_results_filtered, family=gaussian(link='log'))
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
+
+
+### Supplementary Analysis 2A - Entropy
+
+
+```{r}
+
+entropy_formula <- 'entropy ~ modality + (1|word_index:task)'
+
+# Fit the logistic mixed-effects model
+model <- lmer(entropy_formula, data = df_results_filtered)
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+

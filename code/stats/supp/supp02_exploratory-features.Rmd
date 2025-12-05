@@ -1,0 +1,66 @@
+---
+title: "supp02_exploratory-features"
+author: "Tommy Botch"
+date: "2024-11-15"
+output: html_document
+---
+
+# Setup environment
+
+## Load packages and setup paths for analysis
+
+Set up directories - since we're doing this locally (and mounting the server), 
+we're going to use a different base_dir
+
+```{r setup, include=FALSE}
+
+# Source the utils.R file to load the functions
+source("../utils/utils.R")
+
+# Load required and additional packages
+install_and_load()
+
+# Set the paths for this notebook
+set_paths(analysis_name="behavioral", plots_name="behavioral")
+```
+
+# Population-level analysis 
+
+## Data loading
+
+Load data and set factors. Our columns are the following:
+- **modality:** which modality was the stimulus presented as (video, audio, text) 
+- **ground_truth:** ground-truth word to be predicted
+- **top_pred:** most predicted word across the population
+- **word_index:** the word index within the story
+- **task:** which of the three stories was the data from (black, wheretheressmoke, howtodraw)
+
+We create a contrast of modality such that we test the hypothesis that multimodal (video) > spoken (audio) > written (text).
+
+```{r}
+
+results_fn <- file.path(results_dir, "exploratory-features-analysis.csv")
+
+# Load data and convert columns to factors
+df_results <- load_and_prepare_data(
+  file_path=results_fn,
+  factor_columns=c('task', 'word_index', 'ground_truth', "POS_spaCy", "Clause_Pos", "Clause_ID")
+)
+
+# Drop multiple columns
+colnames(df_results)
+```
+
+### Run LME
+
+```{r}
+
+formula <- "improvement_slope ~ Frequency + Valence + Arousal + Concreteness + Length + sentiment_score + (1|task) + (1|POS_spaCy) + (1|Clause_Pos:Clause_ID)"
+
+model <- lmer(
+  formula=formula,
+  data=df_results,
+)
+
+tab_model(model)
+```

@@ -1,0 +1,371 @@
+---
+title: "results01_subject-accuracy-stats"
+author: "Tommy Botch"
+date: "2025-10-02"
+output: html_document
+---
+
+# Setup environment
+
+## Load packages and setup paths for analysis
+
+Set up directories - since we're doing this locally (and mounting the server), 
+we're going to use a different base_dir
+
+```{r setup, include=FALSE}
+
+# Source the utils.R file to load the functions
+source("../utils/utils.R")
+
+# Load required and additional packages
+install_and_load()
+
+# Set the paths for this notebook
+set_paths(analysis_name="behavioral", plots_name="behavioral")
+```
+
+# Participant-level analysis 
+
+## Data loading
+
+Load data and set factors. Our columns are the following:
+- **modality:** which modality was the stimulus presented as (video, audio, text) 
+- **prolific_id:** the unique identifier of each prolific participant
+- **subject:** the subject number yoked to presentation order (repeated across modalities)
+- **word_index:** the word index within the story
+- **task:** which of the three stories was the data from (black, wheretheressmoke, howtodraw)
+
+We create a contrast of modality such that we test the hypothesis that multimodal (video) > spoken (audio) > written (text).
+
+```{r}
+
+results_fn <- file.path(results_dir, "all-task_subject-behavior_lemmatized.csv")
+
+# Load data and convert columns to factors
+df_results <- load_and_prepare_data(
+  file_path=results_fn,
+  factor_columns=c("modality", "prolific_id", "subject", "word_index", "task", "POS_spaCy", "Clause_ID", "Clause_Pos")
+)
+
+# Set the levels for the modality column
+df_results <- set_factor_levels(
+  df=df_results,
+  column_name="modality",
+  levels=c("video", "audio", "text")
+)
+
+df_results <- create_column_contrast(
+  df=df_results, 
+  column_name="modality"
+)
+
+colnames(df_results)
+```
+
+## Analysis 1A - Average accuracy of individual participants
+
+We first test whether there is an advantage of modality at the level of individual participants. To test this hypothesis, we first calculate the average accuracy within a given participant across trials.
+
+```{r}
+
+# Calculate the average accuracy per subject within modality and task
+df_avg <- df_results %>%
+  group_by(subject, modality, task) %>%
+  summarise(avg_accuracy = mean(accuracy), .groups = 'drop')
+
+```
+
+We then predict the average accuracy of participants based on their modality, while controlling for random effect of presentation order (e.g., the identifier used for a subject within a task).
+
+```{r}
+
+average_accuracy_formula <- 'avg_accuracy ~ modality + (1|subject:task)'
+
+# Fit the logistic mixed-effects model
+model <- lmer(average_accuracy_formula, data=df_avg)
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
+### Analysis 1B - Task-level comparisons
+
+We are also interested in understanding how these effects exist at the level of individual tasks. Since task is a random effect in previous models, we therefore run separate models for each tasks.
+
+We first setup our formula to evaluate our model -- we discard task are random-effect as we are inherently testing at the task-level. 
+
+```{r}
+
+task_avg_accuracy_formula <- 'avg_accuracy ~ modality + (1|subject)'
+
+```
+
+We now run this model separately for each task, enabling us to conduct pairwise comparisons of conditions within task.
+
+#### Story = Black
+
+```{r}
+
+model <- lmer_task(
+  task_name='black', 
+  df=df_avg, 
+  formula=task_avg_accuracy_formula
+)
+
+# Output the results
+tab_model(model, show.se = TRUE, show.stat = TRUE, show.r2 = TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+```
+
+#### Story = Smoke
+
+```{r}
+
+model <- lmer_task(
+  task_name='wheretheressmoke', 
+  df=df_avg, 
+  formula=task_avg_accuracy_formula
+)
+
+# Output the results
+tab_model(model, show.se = TRUE, show.stat = TRUE, show.r2 = TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
+#### Story = Draw
+
+```{r}
+
+model <- lmer_task(
+  task_name='howtodraw', 
+  df=df_avg, 
+  formula=task_avg_accuracy_formula
+)
+
+# Output the results
+tab_model(model, show.se = TRUE, show.stat = TRUE, show.r2 = TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
+
+## Analysis 2A - Accuracy of individual participants
+
+We can also investigate whether there are differences in the raw accuracy of participants within a condition (modality) while not collapsing across trials (e.g., avoiding averaging across participants).
+
+To do this, we construct a logistic mixed-effects model that predicts binary accuracy (0/1) based on modality. We control for the random effect of trial (word_index) within task, as well as the random effect of presentation order (subject) within modality and task.
+
+```{r}
+
+formula <- 'accuracy ~ modality + (1|word_index:task) + (1|subject:modality:task)'
+
+# Fit the logistic mixed-effects model
+model <- glmer(formula, 
+               data = df_results, 
+               family = binomial(link = "logit"))
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+summary(model)
+```
+
+## Analysis 2B - Interaction of accuracy with prosody (individual participants)
+
+We also see if prosody (prominence) over the words leading up to the to-be-predicted word relate to the differences in condition (modality). This analysis can only be conducted when we consider individual trials (word_index), as we have a prominence value associated with each word.
+
+```{r}
+
+subject_accuracy_formula <- 'accuracy ~ modality * prominence_mean_words5 + (1|word_index:task) + (1|subject:modality:task)'
+
+# Fit the logistic mixed-effects model
+model <- glmer(subject_accuracy_formula, 
+               data = df_results, 
+               family = binomial(link = "logit"))
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE)
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
+## Analysis 2C - Task-level comparisons
+
+Similar to before, we investigate the effects within-task to conduct pairwise comparisons between conditions. We first set up the formula for the comparison. 
+
+```{r}
+
+task_accuracy_formula <- 'accuracy ~ modality + (1|word_index) + (1|subject:modality)'
+
+```
+
+Now conduct the comparisons for each task.
+
+#### Story = Black
+
+```{r}
+
+model <- lmer_task(
+  task_name='black', 
+  df=df_results, 
+  formula=task_accuracy_formula,
+  family=binomial(link="logit")
+)
+
+# Output the results
+tab_model(model, show.se = TRUE, show.stat = TRUE, show.r2 = TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+```
+
+#### Story = Smoke
+
+```{r}
+
+model <- lmer_task(
+  task_name='wheretheressmoke', 
+  df=df_results, 
+  formula=task_accuracy_formula,
+  family=binomial(link="logit")
+)
+
+# Output the results
+tab_model(model, show.se = TRUE, show.stat = TRUE, show.r2 = TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
+#### Story = Draw
+
+```{r}
+
+model <- lmer_task(
+  task_name='howtodraw', 
+  df=df_results, 
+  formula=task_accuracy_formula,
+  family=binomial(link="logit")
+)
+
+# Output the results
+tab_model(model, show.se = TRUE, show.stat = TRUE, show.r2 = TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
+
+## Supplementary Analysis - Leakage filtering 
+
+We now want to ensure that observed differences were not driven by confounding factors such as "leakage" of auditory input. We therefore filter for any instance where 
+
+```{r}
+
+df_results_filtered <- subset(df_results, !df_results$filter_for_leakage)
+
+```
+
+### Supplementary Analysis 1 - Average accuracy of individual participants
+
+We rerun our analyses of average accuracy after filtering for leakage. We first average trials within subject to compute the average accuracy. 
+
+```{r}
+
+# Calculate the average accuracy per subject within modality and task
+df_avg <- df_results_filtered %>%
+  group_by(subject, modality, task) %>%
+  summarise(avg_accuracy = mean(accuracy), .groups = 'drop')
+
+```
+
+We then predict the average accuracy of participants based on their modality, while controlling for random effect of presentation order (e.g., the identifier used for a subject within a task).
+
+```{r}
+
+average_accuracy_formula <- 'avg_accuracy ~ modality + (1|subject:task)'
+
+# Fit the logistic mixed-effects model
+model <- lmer(average_accuracy_formula, data=df_avg)
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
+### Supplementary Analysis 2 - Accuracy across individuals
+
+We repeat our analysis of raw accuracy across subjects within modality, after filtering for leakage.
+
+```{r}
+
+subject_accuracy_formula <- 'accuracy ~ modality + (1|word_index:task) + (1|subject:modality:task)'
+
+# Fit the logistic mixed-effects model
+model <- glmer(subject_accuracy_formula, 
+               data = df_results_filtered, 
+               family = binomial(link = "logit"))
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE)
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```

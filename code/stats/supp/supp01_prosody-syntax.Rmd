@@ -1,0 +1,605 @@
+---
+title: "supp01_prosody-syntax"
+author: "Tommy Botch"
+date: "2024-11-15"
+output: html_document
+---
+
+# Setup environment
+
+## Load packages and setup paths for analysis
+
+Set up directories - since we're doing this locally (and mounting the server), 
+we're going to use a different base_dir
+
+```{r setup, include=FALSE}
+
+# Source the utils.R file to load the functions
+source("../utils/utils.R")
+
+# Load required and additional packages
+install_and_load()
+
+# Set the paths for this notebook
+set_paths(analysis_name="behavioral", plots_name="behavioral")
+```
+
+# Population-level analysis 
+
+## Data loading
+
+Load data and set factors. Our columns are the following:
+- **modality:** which modality was the stimulus presented as (video, audio, text) 
+- **ground_truth:** ground-truth word to be predicted
+- **top_pred:** most predicted word across the population
+- **word_index:** the word index within the story
+- **task:** which of the three stories was the data from (black, wheretheressmoke, howtodraw)
+
+We create a contrast of modality such that we test the hypothesis that multimodal (video) > spoken (audio) > written (text).
+
+```{r}
+
+tasks <- c("black", "wheretheressmoke", "howtodraw")
+
+df_all <- map_dfr(tasks, function(task) {
+  prosody_syntax_fn <- file.path(
+    stim_dir,
+    task,
+    paste0(task, "_transcript-selected_prosody-syntax.csv")
+  )
+  
+  df <- load_and_prepare_data(
+    file_path = prosody_syntax_fn,
+    factor_columns = c("POS", "POS_spaCy", "Dep", "Head", "Clause_ID", "Clause_Pos", "word")
+  )
+  
+  df$task <- task
+  return(df)
+})
+
+colnames(df_all)
+
+# Turn task into a factor
+df_all$task <- as.factor(df_all$task)
+
+```
+Collapse categories a bit
+
+```{r}
+
+df_all <- df_all %>%
+  mutate(POS_group = case_when(
+    POS_spaCy %in% c("NOUN","PROPN","PRON","NUM") ~ "Nominal",
+    POS_spaCy %in% c("VERB","AUX") ~ "Verb",
+    POS_spaCy %in% c("ADJ","ADV") ~ "Modifier",
+    # POS_spaCy %in% c("CCONJ","SCONJ") ~ "Function"
+  )) %>%
+  mutate(POS_group = factor(POS_group))
+
+# Set factor levels and reference
+df_all$POS_group <- factor(
+  df_all$POS_group,
+  levels = c("Nominal", "Verb", "Modifier")  # ordered as desired
+)
+
+df_all <- na.omit(df_all)
+
+# Remove non-NWP candidates
+df_sub <- subset(df_all, df_all$NWP_Candidate == "True")
+
+# Make sure POS is a factor with all levels kept
+df_sub$POS_spaCy <- droplevels(df_sub$POS_spaCy)
+
+```
+
+
+## Analysis 1 -- POS Correlation w/ Prosody
+
+```{r}
+
+levels(df_all$POS_spaCy)
+
+formula <- "prominence_1 ~ -1 + POS_group + (1|Clause_Pos) + (1|word) + (1|task)"
+
+model <- lmer(formula, data=df_sub)
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+plot_model(model, type="pred", terms=c("POS_group"))
+
+preds <- data.frame(get_model_data(model, type='pred', terms = c("POS_group")))
+
+preds
+
+ggplot(preds, aes(x=x, y=predicted)) +
+  geom_point(
+    data = df_sub,
+    aes(x=POS_group, y=prominence),
+    stroke=1,
+    alpha=0.035
+  ) +
+  # Add predicted mean points
+  geom_point(
+    data = preds,
+    aes(x=x, y=predicted),
+    color="red",
+    size=3
+  ) +
+  # Add error bars for predictions
+  geom_errorbar(
+    data = preds,
+    aes(x=x, ymin=conf.low, ymax=conf.high),
+    width=0.2,
+    color="red"
+  ) +
+  theme(
+    aspect.ratio = 3/4,
+    axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank()
+  ) +
+  scale_color_manual(values=colors) +
+  scale_fill_manual(values=colors) +
+  labs(
+    x = "Part of Speech",
+    y = "Prosodic Prominence",
+    title = "Relationship of POS and Prosody"
+  )
+
+```
+## Analysis 2 - Lagged prosody
+
+Examine whether prosody at the word before a given word predicts the upcoming part of speech
+
+## Binary models
+
+```{r}
+
+library(glue)
+
+# ===================================================================
+# APPROACH 1: SEPARATE BINARY MODELS (Most interpretable)
+# ===================================================================
+
+# Test each category vs. all others
+binary_models <- list()
+categories <- levels(df_sub$POS_group)
+
+prominence_entry <- "prominence_9"
+
+for(cat in categories) {
+  # Create binary outcome
+  df_sub[[paste0("is_", cat)]] <- ifelse(df_sub$POS_group == cat, 1, 0)
+  
+  # Fit binary model with tryCatch
+  model <- tryCatch(
+    {
+      glmer(
+        as.formula(glue("is_{cat} ~ {prominence_entry} + (1|Clause_Pos:Clause_ID) + (1|task)")),
+        data = df_sub,
+        family = binomial()
+      )
+    },
+    error = function(e) {
+      message("Model failed for category: ", cat, " -- skipping")
+      return(NULL)  # return NULL if the model fails
+    }
+  )
+  
+  # Only save the model if it succeeded
+  if (!is.null(model)) {
+    binary_models[[cat]] <- model
+  }
+}
+
+# Extract and compare effects including p-values
+binary_effects <- map_dfr(names(binary_models), ~ {
+  model <- binary_models[[.x]]
+  
+  # Coefficient estimate for prominence_lag1
+  est <- fixef(model)[prominence_entry]
+  
+  # Standard error
+  se <- sqrt(diag(vcov(model)))[prominence_entry]
+  
+  # 95% CI using Wald approximation
+  ci_low <- est - 1.96 * se
+  ci_high <- est + 1.96 * se
+  
+  # Wald z-test for significance
+  z_value <- est / se
+  p_value <- 2 * (1 - pnorm(abs(z_value)))
+  
+  data.frame(
+    category = .x,
+    estimate = est,
+    conf.low = ci_low,
+    conf.high = ci_high,
+    z = z_value,
+    p.value = p_value
+  )
+})
+
+print("Binary model effects with significance:")
+print(binary_effects)
+
+
+# Plot binary effects
+ggplot(binary_effects, aes(x = category, y = estimate)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Binary Model Effects: Each Category vs. Others",
+       x = "POS Category", y = "Log-odds of being in category") +
+  theme_minimal()
+
+```
+
+## Multinomial Classificiation
+
+```{r}
+library(mclogit)
+
+# -------------------------------
+# 1. Set predictor variable here
+# -------------------------------
+predictor_var <- "prominence_mean_words5"  # <-- change this to any numeric predictor
+
+# -------------------------------
+# 2. Fit the multinomial model
+# -------------------------------
+modele <- mblogit(
+  formula = as.formula(paste("POS_group ~ ", predictor_var)),
+  random = list(~1|task, ~1|Clause_Pos),
+  data = df_sub,
+  method = "PQL",
+  estimator = "ML"
+)
+
+tab_model(modele)
+# -------------------------------
+# 3. Create prediction data frame
+# -------------------------------
+preds <- predict(modele, type = "response")
+pred_df <- as.data.frame(preds)
+
+# Attach the predictor column dynamically
+pred_df[[predictor_var]] <- df_sub[[predictor_var]]
+
+# Pivot to long format
+pred_long <- pred_df %>%
+  pivot_longer(
+    cols = -all_of(predictor_var),
+    names_to = "POS_group",
+    values_to = "probs"
+  )
+
+# -------------------------------
+# 4. Aggregate predictions for smooth plotting
+# -------------------------------
+# Bin the predictor to reduce noise
+pred_summary <- pred_long %>%
+  mutate(bin = cut(.data[[predictor_var]], breaks = 10)) %>%
+  group_by(bin, POS_group) %>%
+  summarize(
+    mean_prob = mean(probs),
+    se_prob = sd(probs)/sqrt(n()),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    conf.low = mean_prob - 1.96*se_prob,
+    conf.high = mean_prob + 1.96*se_prob
+  )
+
+# Baseline (chance) probability per category
+baseline <- pred_long %>%
+  group_by(POS_group) %>%
+  summarize(baseline_prob = mean(probs), .groups = "drop")
+
+
+```
+
+### Plot classification probability based on prominence
+
+```{r}
+
+# -------------------------------
+# 5. Plot
+# -------------------------------
+ggplot(pred_summary, aes(x = as.numeric(bin), y = mean_prob, color = POS_group, group = POS_group)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = POS_group), alpha = 0.2, color = NA) +
+  geom_hline(
+    data = baseline,
+    aes(yintercept = baseline_prob, color = POS_group),
+    linetype = "dashed", size = 0.8
+  ) +
+  theme_minimal() +
+  scale_x_continuous(
+    breaks = 1:10,
+    labels = round(seq(min(df_sub[[predictor_var]]), max(df_sub[[predictor_var]]), length.out = 10), 2)
+  ) +
+  labs(
+    x = predictor_var,
+    y = "Predicted Probability",
+    title = paste("Predicted Probabilities vs", predictor_var)
+  ) +
+  theme(legend.title = element_blank())
+
+```
+### Testing different appraoch
+
+```{r}
+pos_levels <- levels(df_sub$POS_group)
+n <- nrow(df_sub)
+
+# -----------------------------
+# 1. Marginal frequency baseline (no sampling needed)
+# -----------------------------
+marginal_probs <- prop.table(table(df_sub$POS_group))
+# Predict most frequent class for everyone
+most_frequent_class <- names(which.max(marginal_probs))
+pred_marginal <- factor(rep(most_frequent_class, n), levels = pos_levels)
+
+# pred_marginal <- sample(names(marginal_probs), 
+#                                size = n, 
+#                                replace = TRUE, 
+#                                prob = marginal_probs)
+
+# Create confusion matrix
+conf_marginal <- table(Predicted = pred_marginal, Actual = df_sub$POS_group)
+conf_marginal_df <- as.data.frame(conf_marginal) %>%
+  mutate(Freq_norm = Freq / n, Type = "Marginal Baseline")
+
+# -----------------------------
+# 2. Intercept-only model baseline
+# -----------------------------
+
+# Fit intercept-only model
+intercept_model <- mblogit(
+  POS_group ~ 1,
+  random = list(~1|task, ~1|Clause_Pos),
+  data = df_sub,
+  method = "PQL",
+  estimator = "ML"
+)
+
+# Get predictions from intercept-only model
+pred_intercept_probs <- predict(intercept_model, type = "response")
+pred_intercept_class <- factor(colnames(pred_intercept_probs)[max.col(pred_intercept_probs)], 
+                              levels = pos_levels)
+
+conf_intercept <- table(Predicted = pred_intercept_class, Actual = df_sub$POS_group)
+conf_intercept_df <- as.data.frame(conf_intercept) %>%
+  mutate(Freq_norm = Freq / n, Type = "Intercept-only")
+
+# -----------------------------
+# 3. Full model predictions (recalculate the original model)
+# -----------------------------
+# This should match your original model exactly
+full_model <- mblogit(
+  formula = as.formula(paste("POS_group ~ ", predictor_var)),
+  random = list(~1|task, ~1|Clause_Pos),
+  data = df_sub,
+  method = "PQL",
+  estimator = "ML"
+)
+
+# Get predictions from the full model
+pred_full_probs <- predict(full_model, type = "response")
+pred_class <- factor(colnames(pred_full_probs)[max.col(pred_full_probs)], levels = pos_levels)
+
+conf_full <- table(Predicted = pred_class, Actual = df_sub$POS_group)
+conf_full_df <- as.data.frame(conf_full) %>%
+  mutate(Freq_norm = Freq / n, Type = "Full Model")
+
+# -----------------------------
+# 4. Calculate performance metrics
+# -----------------------------
+calculate_metrics <- function(conf_matrix, model_name) {
+  # Overall accuracy
+  accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+  
+  # Per-class metrics
+  precision <- diag(conf_matrix) / rowSums(conf_matrix)
+  recall <- diag(conf_matrix) / colSums(conf_matrix)
+  f1 <- 2 * (precision * recall) / (precision + recall)
+  
+  # Handle NaN values
+  precision[is.nan(precision)] <- 0
+  recall[is.nan(recall)] <- 0
+  f1[is.nan(f1)] <- 0
+  
+  data.frame(
+    Model = model_name,
+    Accuracy = accuracy,
+    Mean_Precision = mean(precision, na.rm = TRUE),
+    Mean_Recall = mean(recall, na.rm = TRUE),
+    Mean_F1 = mean(f1, na.rm = TRUE)
+  )
+}
+
+# Calculate metrics for all models
+metrics_marginal <- calculate_metrics(conf_marginal, "Marginal Baseline")
+metrics_intercept <- calculate_metrics(conf_intercept, "Intercept-only")
+metrics_full <- calculate_metrics(conf_full, "Full Model")
+
+performance_summary <- bind_rows(metrics_marginal, metrics_intercept, metrics_full)
+print("Model Performance Comparison:")
+print(performance_summary)
+
+# -----------------------------
+# 5. Combine confusion matrices for visualization
+# -----------------------------
+conf_combined <- bind_rows(conf_marginal_df, conf_intercept_df, conf_full_df) %>%
+  mutate(Type = factor(Type, levels = c("Marginal Baseline", "Intercept-only", "Full Model")))
+
+# -----------------------------
+# 6. Enhanced visualization
+# -----------------------------
+p1 <- ggplot(conf_combined, aes(x = Actual, y = Predicted, fill = Freq_norm)) +
+  geom_tile(color = "white", size = 0.5) +
+  geom_text(aes(label = paste0(Freq, "\n(", round(Freq_norm, 3), ")")), 
+            color = "white", size = 3) +
+  facet_wrap(~Type) +
+  scale_fill_gradient(low = "steelblue", high = "darkred", name = "Proportion") +
+  scale_y_discrete(limits = rev(pos_levels)) +
+  coord_fixed() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Model Performance Comparison w/ Random Effects: Confusion Matrices",
+       subtitle = "Numbers show count (proportion)",
+       x = "Actual POS",
+       y = "Predicted POS")
+
+# Performance metrics visualization
+p2 <- performance_summary %>%
+  select(-Accuracy) %>%
+  tidyr::pivot_longer(cols = -Model, names_to = "Metric", values_to = "Value") %>%
+  ggplot(aes(x = Model, y = Value, fill = Metric)) +
+  geom_col(position = "dodge") +
+  scale_y_continuous(limits = c(0, 1)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Model Performance Metrics",
+       y = "Score",
+       x = "Model Type")
+
+# Print plots
+print(p1)
+print(p2)
+
+# -----------------------------
+# 7. Statistical significance test (McNemar's test for paired comparisons)
+# -----------------------------
+# Compare full model vs intercept-only
+mcnemar_test <- function(conf1, conf2) {
+  # Create contingency table for McNemar's test
+  correct1 <- diag(conf1)
+  correct2 <- diag(conf2)
+  
+  # This is a simplified approach - for proper McNemar's test with multinomial,
+  # you might want to use more sophisticated methods
+  overall_acc1 <- sum(correct1) / sum(conf1)
+  overall_acc2 <- sum(correct2) / sum(conf2)
+  
+  cat("Accuracy comparison:\n")
+  cat("Full Model:", round(overall_acc1, 4), "\n")
+  cat("Intercept-only:", round(overall_acc2, 4), "\n")
+  cat("Improvement:", round(overall_acc1 - overall_acc2, 4), "\n")
+}
+
+mcnemar_test(conf_full, conf_intercept)
+
+# -----------------------------
+# 8. Class-wise improvement analysis
+# -----------------------------
+class_improvement <- data.frame(
+  POS_group = pos_levels,
+  Marginal_Accuracy = diag(conf_marginal) / colSums(conf_marginal),
+  Intercept_Accuracy = diag(conf_intercept) / colSums(conf_intercept),
+  Full_Accuracy = diag(conf_full) / colSums(conf_full)
+) %>%
+  mutate(
+    Improvement_over_Marginal = Full_Accuracy - Marginal_Accuracy,
+    Improvement_over_Intercept = Full_Accuracy - Intercept_Accuracy
+  )
+
+print("Class-wise Performance:")
+print(class_improvement)
+
+```
+
+
+### Plot confusion matrices
+
+```{r}
+
+
+pos_levels <- levels(df_sub$POS_group)
+n <- nrow(df_sub)
+
+# -----------------------------
+# 1. Native baseline: sample according to marginal frequencies
+# -----------------------------
+native_probs <- prop.table(table(df_sub$POS_group))
+
+set.seed(123)
+native_class_sample <- sample(names(native_probs),
+                              size = n,
+                              replace = TRUE,
+                              prob = native_probs)
+
+conf_native <- table(Predicted = native_class_sample,
+                     Actual = df_sub$POS_group) %>%
+  as.data.frame() %>%
+  rename(Count = Freq) %>%
+  mutate(Freq = Count / n,
+         Type = "Native") %>%
+  select(Predicted, Actual, Freq, Type)
+
+# -----------------------------
+# 2. Intercept-only baseline
+# -----------------------------
+coefs <- coef(modele)
+intercepts_vec <- coefs[grep("\\(Intercept\\)", names(coefs))]
+names(intercepts_vec) <- gsub("~\\(Intercept\\)", "", names(intercepts_vec))
+
+exp_int <- exp(intercepts_vec)
+p_nominal <- 1 / (1 + sum(exp_int))
+p_other <- exp_int / (1 + sum(exp_int))
+baseline_probs_vec <- c(Nominal = p_nominal, p_other)
+
+set.seed(123)
+baseline_class_prob <- sample(names(baseline_probs_vec),
+                              size = n,
+                              replace = TRUE,
+                              prob = baseline_probs_vec)
+
+conf_baseline <- table(Predicted = baseline_class_prob,
+                       Actual = df_sub$POS_group) %>%
+  as.data.frame() %>%
+  rename(Count = Freq) %>%
+  mutate(Freq = Count / n,
+         Type = "Intercept-only") %>%
+  select(Predicted, Actual, Freq, Type)
+
+# -----------------------------
+# 3. Observed predictions
+# -----------------------------
+
+pred_class <- colnames(preds)[max.col(preds)]
+pred_class <- factor(pred_class, levels = pos_levels)
+
+conf_observed <- table(Predicted = pred_class,
+                       Actual = df_sub$POS_group) %>%
+  as.data.frame() %>%
+  rename(Count = Freq) %>%
+  mutate(Freq = Count / n,
+         Type = "Observed") %>%
+  select(Predicted, Actual, Freq, Type)
+
+# -----------------------------
+# 4. Combine all three and set order
+# -----------------------------
+conf_combined <- bind_rows(conf_native, conf_baseline, conf_observed) %>%
+  mutate(Type = factor(Type, levels = c("Native", "Intercept-only", "Observed")))
+
+# -----------------------------
+# 5. Plot all as frequency confusion matrices
+# -----------------------------
+ggplot(conf_combined, aes(x = Actual, y = Predicted, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = round(Freq, 2)), color = "white") +
+  facet_wrap(~Type) +
+  scale_fill_gradient(low = "steelblue", high = "darkred") +
+  scale_y_discrete(limits = rev(pos_levels)) +
+  coord_fixed() +  # ensures squares
+  theme_minimal() +
+  labs(title = "POS Distribution Comparison (Sampled Frequencies)",
+       x = "Actual POS",
+       y = "Predicted POS",
+       fill = "Frequency")
+```
