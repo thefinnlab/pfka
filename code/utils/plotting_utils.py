@@ -176,7 +176,7 @@ def load_task_model_quadrants(preproc_dir, models_dir, task_list, model_names, w
 
         # get mean across models
         df_quadrants = pd.concat(quadrants)
-        df_quadrants = df_quadrants.groupby('word_index').mean().reset_index()
+        df_quadrants = df_quadrants.groupby('word_index').mean(numeric_only=True).reset_index()
         df_quadrants['task'] = task
 
         all_quadrants.append(df_quadrants)

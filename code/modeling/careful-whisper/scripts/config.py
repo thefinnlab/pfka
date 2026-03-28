@@ -1,7 +1,7 @@
 import os, sys
 
 ## primary directories
-BASE_DIR = '/dartfs/rc/lab/F/FinnLab/tommy/pfka/code/modeling/careful-whisper'
+BASE_DIR = '/dartfs/rc/lab/F/FinnLab/tommy/isc_asynchrony_behavior/code/modeling/careful-whisper'
 DATASETS_DIR = '/dartfs/rc/lab/F/FinnLab/datasets/'
 
 ## secondary directories

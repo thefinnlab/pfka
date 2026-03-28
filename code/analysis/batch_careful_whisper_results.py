@@ -1,301 +1,453 @@
-import warnings
-warnings.filterwarnings("ignore")
+"""
+Batch script for generating SLURM job arrays for CarefulWhisper results.
 
-import os, sys, glob
-import json
-import numpy as np
-import pandas as pd
+Subcommands:
+  results   Generate inference jobs (one per dataset × model variant) calling
+            run_careful_whisper_results.py results
+  analysis  Generate a lightweight analysis job calling
+            run_careful_whisper_results.py analysis
+            (NOTE: subsets are not supported for analysis)
+
+Usage:
+  Results (all 7 model variants):
+    python batch_careful_whisper_results.py results -d lrs3 avspeech voxceleb2
+    python batch_careful_whisper_results.py results -d lrs3 -s test
+
+  Analysis (compute ΔI from saved CSVs):
+    python batch_careful_whisper_results.py analysis -d lrs3 avspeech voxceleb2
+"""
+
+import sys, os
 import argparse
-from itertools import product
-import subprocess
+import glob
 
 sys.path.append('../utils/')
+sys.path.append('../modeling/careful-whisper/scripts/')
 
 from config import *
 from dataset_utils import attempt_makedirs
 
-sys.path.append('../modeling/careful-whisper/scripts/')
+# Inference jobs require the prosody env (pyrootutils, hydra, lightning)
+DSQ_MODULES = DSQ_MODULES.replace('conda activate analysis', 'conda activate prosody')
+DSQ_MODULES = DSQ_MODULES.replace('cuda/11.2', 'cuda/12.3')
 
-import utils
+# -----------------------------------------------------------------------
+# Paths
+# -----------------------------------------------------------------------
+MODELING_DIR      = os.path.join(BASE_DIR, 'code/modeling/careful-whisper')
+MODELING_LOGS     = os.path.join(MODELING_DIR, 'logs/train/careful-whisper')
+TOKEN_FUSION_LOGS = os.path.join(MODELING_DIR, 'logs/train/token-fusion')
 
-PARTITION = 'preemptable'
-TIME = '12:00:00'
-N_NODES = 1
+# -----------------------------------------------------------------------
+# SLURM settings
+# -----------------------------------------------------------------------
+EXCLUDE          = '' #'p04'
+CPUS_PER_TASK    = 16
+MEM_PER_CPU      = '8G'
+PARTITION        = 'v100_preemptable'
+GPU_INFO         = '--gres=gpu:1'
+N_NODES          = 1
 N_TASKS_PER_NODE = 1
-N_TASKS = 1
-CPUS_PER_TASK = 8
-MEM_PER_CPU = '8G'
-EXCLUDE = 'q04'
-ACCOUNT = 'dbic'
+N_TASKS          = 1
+ACCOUNT          = 'dbic'
+RESULTS_TIME     = '1-00:00:00'
+ANALYSIS_TIME    = '0-01:00:00'
 
-DATASET_INFO = {
-    'gigaspeech-m': {
-        'splits': ['test'],
-        'data_config':[
-            'data.dataset_name=gigaspeech-m',
-            'data.data_dir=\${paths.data_dir}/gigaspeech/m',
-            'data.cache_dir=\${paths.cache_dir}/nlp-datasets/gigaspeech/m',
-    ]},
-
-    'libritts-r': {
-        'splits': ['test-clean'],
-        'data_config': [
-            'data.dataset_name=libritts-r',
-            'data.data_dir=\${paths.data_dir}/libritts-r',
-            'data.cache_dir=\${paths.cache_dir}/nlp-datasets/libritts-r',
-    ]},
-
-    'tedlium': {
-        'splits': ['test'],
-        'data_config': [
-            'data.dataset_name=tedlium',
-            'data.data_dir=\${paths.data_dir}/tedlium',
-            'data.cache_dir=\${paths.cache_dir}/nlp-datasets/tedlium',
-    ]},
-
-    'peoples-speech': {
-        'splits': ['test'],
-        'data_config': [
-            'data.dataset_name=peoples-speech',
-            'data.data_dir=\${paths.data_dir}/peoples-speech',
-            'data.cache_dir=\${paths.cache_dir}/nlp-datasets/peoples-speech',
-    ]},
-
-    'pfka-moth-stories': {
-        'splits': ['black', 'wheretheressmoke', 'howtodraw'],
-        'data_config': [
-            'data.dataset_name=pfka-moth-stories',
-            'data.data_dir=\${paths.data_dir}/pfka-moth-speech',
-            'data.cache_dir=\${paths.cache_dir}/nlp-datasets/pfka-moth-speech',
-    ]},
-
-    'lrs3': {
-        'splits': ['test'],
-        'data_config': [
-            'data.dataset_name=lrs3',
-            'data.data_dir=\${paths.data_dir}/lrs3',
-    ]},
-
-    'voxceleb2': {
-        'splits': ['test'],
-        'data_config': [
-            'data.dataset_name=voxceleb2',
-            'data.data_dir=\${paths.data_dir}/voxceleb2',
-    ]},
-
-    'avspeech': {
-        'splits': ['test'],
-        'data_config': [
-            'data.dataset_name=avspeech',
-            'data.data_dir=\${paths.data_dir}/avspeech',
-    ]},
-
-    'av-combined': {
-        'splits': ['test'],
-        'data_config': [
-            'data.dataset_name=av-combined',
-            'data.data_dir=\${paths.data_dir}/av-combined',
-    ]},
+# -----------------------------------------------------------------------
+# Model variants
+# Base models are defined explicitly. Shuffled variants are auto-generated:
+#   - shuffle=1, run_dir and model_name_suffix gain '-shuffled'
+#   - prosody shuffled: context_dim=1 → context_dim=null
+# (data.shuffle_context_dims is handled by the -shuffle_context_dims CLI flag)
+# -----------------------------------------------------------------------
+_BASE_VARIANTS = {
+    'text': {
+        'run_dir':           'text',
+        'overrides': [
+            'model.config.cross_attention=False',
+            'model.config.use_causal_cross_attention=False',
+        ],
+        'context_type':      'audio_features',
+        'model_name_suffix': 'text-careful-whisper_no-xattn',
+        'audiovisual':       0,
+        'has_shuffled':      False,
+    },
+    'audio': {
+        'run_dir':           'audio',
+        'overrides': [
+            'model.config.cross_attention=True',
+            'model.config.use_causal_cross_attention=True',
+            'model.config.context_embed_dropout=0.1',
+            'model.config.context_pos_embed=True',
+        ],
+        'context_type':      'audio_features',
+        'model_name_suffix': 'audio-careful-whisper_causal-xattn',
+        'audiovisual':       0,
+        'has_shuffled':      True,
+    },
+    'prosody': {
+        'run_dir':           'prosody',
+        'overrides': [
+            'model.config.cross_attention=True',
+            'model.config.use_causal_cross_attention=True',
+            'model.config.context_type=prominence',
+            'model.config.context_dim=1',
+            'model.config.context_embed_dropout=0.1',
+            'model.config.context_pos_embed=True',
+        ],
+        'context_type':      'prominence',
+        'model_name_suffix': 'prosody-careful-whisper_causal-xattn',
+        'audiovisual':       0,
+        'has_shuffled':      True,
+    },
+    'audiovisual': {
+        'run_dir':           'audiovisual',
+        'overrides': [
+            'model.config.cross_attention=True',
+            'model.config.use_causal_cross_attention=True',
+            'model.config.context_type=audiovisual_features',
+            'model.config.context_embed_dropout=0.1',
+            'model.config.context_pos_embed=True',
+        ],
+        'context_type':      'audiovisual_features',
+        'model_name_suffix': 'audiovisual-careful-whisper_causal-xattn_token-fusion-mlp',
+        'audiovisual':       1,
+        'has_shuffled':      True,
+    },
 }
 
-def create_model_variations(base_configs, subset_percentages=None):
-    """Create model config variations for different subset sizes."""
-    variations = {}
-    
-    for model_name, config in base_configs.items():        
-        # Add subset versions
-        if subset_percentages is not None:
-            for subset in subset_percentages:
-                subset_name = f"{model_name}_subset-{str(subset).zfill(3)}"
-                subset_config = config.copy()
-                subset_config.append(f"data.subset_percentage={subset}")
-                variations[subset_name] = subset_config
-        else:
-            # Full dataset version
-            variations[model_name] = config.copy()
-            
-    return variations
 
-if __name__ == '__main__':
+def _make_variants(base):
+    """Expand base model configs into full + shuffled variants."""
+    variants = {}
+    for name, cfg in base.items():
+        variants[name] = {k: v for k, v in cfg.items() if k != 'has_shuffled'}
+        variants[name]['shuffle'] = 0
+        if cfg['has_shuffled']:
+            prefix, rest = cfg['model_name_suffix'].split('-', 1)
+            shuffled_overrides = [
+                o.replace('context_dim=1', 'context_dim=null') for o in cfg['overrides']
+            ]
+            variants[f'{name}-shuffled'] = {
+                'run_dir':           f'{name}-shuffled',
+                'overrides':         shuffled_overrides,
+                'context_type':      cfg['context_type'],
+                'shuffle':           1,
+                'model_name_suffix': f'{prefix}-shuffled-{rest}',
+                'audiovisual':       cfg['audiovisual'],
+            }
+    return variants
 
-    parser = argparse.ArgumentParser()
 
-    # type of analysis we're running --> linked to the name of the regressors
-    parser.add_argument('-train', '--train_dataset', type=str)
-    parser.add_argument('-test', '--test_dataset', type=str, default=None)
-    parser.add_argument('-subsets', '--subsets', type=int, default=0)
-    parser.add_argument('-o', '--overwrite', type=int, default=0)
-    p = parser.parse_args()
+MODEL_VARIANTS = _make_variants(_BASE_VARIANTS)
 
-    if not p.test_dataset:
-        p.test_dataset = p.train_dataset
+SUBSET_PERCENTAGES = [2, 3, 4, 5, 6, 8, 11, 14, 19, 25, 30, 40, 50, 60, 70, 80, 90]
 
-    EXPERIMENT_NAME = 'careful_whisper'
-    MODELS_DIR = os.path.join(BASE_DIR, 'code/modeling/careful-whisper/')
-    CKPTS_DIR = os.path.join(MODELS_DIR, f'logs/train/careful-whisper/{p.train_dataset}/')
 
-    MODEL_CONFIGS = {
+# -----------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------
 
-        # General GPT2-esque model
-        'text-careful-whisper_no-xattn': [
-            f"model.config.cross_attention=False",
-            f"model.config.use_causal_cross_attention=False",
-        ],
+def find_best_checkpoint(ckpt_dir):
+    """Return the best epoch checkpoint in ckpt_dir, falling back to last.ckpt."""
+    epoch_ckpts = sorted(glob.glob(os.path.join(ckpt_dir, 'epoch_*.ckpt')))
+    if epoch_ckpts:
+        return epoch_ckpts[0]
+    last = os.path.join(ckpt_dir, 'last.ckpt')
+    if os.path.exists(last):
+        return last
+    raise FileNotFoundError(f'No checkpoint found in {ckpt_dir}')
 
-        # Whisper w/ CLM integration
-        'audio-careful-whisper_causal-xattn': [
-            f"model.config.cross_attention=True",
-            f"model.config.use_causal_cross_attention=True",
 
-            # Add in dropout and position embedding
-            f"model.config.context_embed_dropout=0.1",
-            f"model.config.context_pos_embed=True",
-        ],
+def find_model_checkpoint(dataset, run_dir_name):
+    ckpt_dir = os.path.join(MODELING_LOGS, dataset, run_dir_name, 'checkpoints')
+    return find_best_checkpoint(ckpt_dir)
 
-        # Whisper w/ CLM integration
-        'audiovisual-careful-whisper_causal-xattn_token-fusion-mlp': [
-            f"model.config.cross_attention=True",
-            f"model.config.use_causal_cross_attention=True",
 
-            # Prosody embedding information
-            f"model.config.context_type=audiovisual_features",
-            f"model.config.context_embed_dropout=0.1",
-            f"model.config.context_pos_embed=True",
-        ],
+def find_token_fusion_checkpoint(dataset):
+    """Dynamically find the best token-fusion checkpoint for a dataset."""
+    # token-fusion runs are stored under a single subdirectory per dataset;
+    # glob for any run dir containing a checkpoints/ folder
+    pattern = os.path.join(TOKEN_FUSION_LOGS, dataset, '*', 'checkpoints')
+    ckpt_dirs = sorted(glob.glob(pattern), key=os.path.getmtime)
+    if not ckpt_dirs:
+        raise FileNotFoundError(
+            f'No token-fusion checkpoint directory found under '
+            f'{TOKEN_FUSION_LOGS}/{dataset}/'
+        )
+    # Use the last (most recent) run directory if multiple exist
+    return find_best_checkpoint(ckpt_dirs[-1])
 
-        # Whisper w/ CLM integration
-        'prosody-careful-whisper_causal-xattn': [
-            f"model.config.cross_attention=True",
-            f"model.config.use_causal_cross_attention=True",
 
-            # Prosody embedding information
-            f"model.config.context_type=prominence",
-            f"model.config.context_dim=1",
-            f"model.config.context_embed_dropout=0.1",
-            f"model.config.context_pos_embed=True",
+def write_dsq_script(dsq_fn, log_dir, joblist_fn, n_jobs, time, dsq_name, gpu=True):
+    """Write a dSQ SLURM array submission script."""
+    gpu_flag = f'{GPU_INFO} ' if gpu else ''
+    content = (
+        f"#!/bin/bash\n"
+        f"#SBATCH --output {log_dir}/{dsq_name}-%A_%1a-%N.txt\n"
+        f"#SBATCH --array 0-{n_jobs - 1}\n"
+        f"#SBATCH --job-name {dsq_name}\n"
+        f"#SBATCH --partition={PARTITION} --time={time} --account={ACCOUNT} "
+        f"--nodes={N_NODES} {gpu_flag}--ntasks-per-node={N_TASKS_PER_NODE} "
+        f"--ntasks={N_TASKS} --exclude={EXCLUDE} "
+        f"--cpus-per-task={CPUS_PER_TASK} --mem-per-cpu={MEM_PER_CPU}\n\n"
+        f"# DO NOT EDIT LINE BELOW\n"
+        f"/optnfs/common/dSQ/dSQ-1.05/dSQBatch.py "
+        f"--job-file {joblist_fn} --status-dir {log_dir}\n"
+    )
+    with open(dsq_fn, 'w') as f:
+        f.write(content)
 
-        ],
-    }
 
-    # Set up dataset info as the test dataset
-    dataset_config = ' '.join(DATASET_INFO[p.test_dataset]['data_config'])
-    splits = DATASET_INFO[p.test_dataset]['splits']
+# -----------------------------------------------------------------------
+# Subcommand: results
+# -----------------------------------------------------------------------
 
-    # # Log space 2 - 25% 
-    subset_percentages = np.logspace(0.3, 1.4, 10) / 100
+def run_results(p):
+    """Generate SLURM inference jobs for all model variants × datasets."""
 
-    # 30% - 100% 
-    subset_percentages = np.concatenate((
-        subset_percentages,
-        np.arange(0.3, 1, 0.1)
-    ))
+    analysis_dir = os.path.join(BASE_DIR, 'code/analysis')
+    submit_dir   = os.path.join(analysis_dir, 'submit_scripts')
+    dsq_dir      = os.path.join(submit_dir, 'dsq')
+    joblist_dir  = os.path.join(submit_dir, 'joblists')
+    logs_dir     = os.path.join(BASE_DIR, 'derivatives', 'logs', 'careful-whisper', 'results')
 
-    # Scale to percentages and apply if needed
-    subset_percentages = (100 * np.sort(np.round(subset_percentages, 2))).astype(int) if p.subsets else None
+    for d in [dsq_dir, joblist_dir, logs_dir]:
+        attempt_makedirs(d)
 
-    subset_percentages = subset_percentages[subset_percentages == 11]
+    run_script = os.path.join(analysis_dir, 'run_careful_whisper_results.py')
+    all_cmds   = []
 
-    MODEL_CONFIGS = create_model_variations(MODEL_CONFIGS, subset_percentages)
+    for dataset in p.datasets:
+        for variant_name, variant in MODEL_VARIANTS.items():
 
-    #####################################
-    ############ Create jobs ############
-    #####################################
-
-    all_cmds = []
-    script_fn = os.path.join(os.getcwd(), 'run_careful_whisper_results.py')
-    job_string = f"{DSQ_MODULES.replace('dark_matter', 'prosody')} srun python {script_fn}"
-    job_num = 0
-
-    # failed_jobs = [4]
-
-    counter = 0
-
-    for i, (model_name, model_config) in enumerate(MODEL_CONFIGS.items()):
-
-        # This becomes the name of the output file
-        dataset_model = f'{p.train_dataset}_{model_name}'
-        model_config = ' '.join(model_config)
-
-        if 'audiovisual' not in model_name:
-            continue
-
-        # if counter not in failed_jobs:
-        #     counter += 1
-        #     continue
-        
-        # counter += 1
-
-        for split in splits:
-
-            print (dataset_model)
-            
-            if p.test_dataset == 'pfka-moth-stories':
-                out_dir = os.path.join(BASE_DIR, 'derivatives/model-predictions', split, 'careful-whisper', dataset_model, f'window-size-{str(WINDOW_SIZE).zfill(5)}')
-                out_fn = os.path.join(out_dir, f'task-{split}_window-size-{str(WINDOW_SIZE).zfill(5)}_top-{TOP_N}.csv')
-
-                file_exists = os.path.exists(out_fn)
-            else:
-
-                results_dir = os.path.join(BASE_DIR, f'derivatives/careful-whisper/{p.test_dataset}/')
-                results_dir = f'{results_dir}m/'if p.test_dataset == 'gigaspeech' else results_dir
-                out_fn = os.path.join(results_dir, f'{dataset_model}_test.csv')
-
-                file_exists = os.path.exists(out_fn)
-
-            if file_exists and not p.overwrite:
+            try:
+                ckpt_path = find_model_checkpoint(dataset, variant['run_dir'])
+            except FileNotFoundError as e:
+                print(f'WARNING: {e}', flush=True)
                 continue
-            
-            ckpt_path = sorted(glob.glob(os.path.join(CKPTS_DIR, model_name, 'checkpoints', 'epoch*.ckpt')))[-1]
 
-            cfg = (
-                f"experiment={EXPERIMENT_NAME}.yaml "
-                f"{model_config} "
-                f"{dataset_config} "
-            )
-    
+            model_name    = f"{dataset}_{variant['model_name_suffix']}"
+            all_overrides = ['experiment=careful_whisper.yaml'] + variant['overrides']
+            overrides_str = '-overrides ' + ' '.join(all_overrides)
+
+            token_fusion_arg = ''
+            if variant['audiovisual']:
+                try:
+                    tf_ckpt = find_token_fusion_checkpoint(dataset)
+                    token_fusion_arg = f'-token_fusion_ckpt {tf_ckpt}'
+                except FileNotFoundError as e:
+                    print(f'WARNING: {e}', flush=True)
+                    continue
+
             cmd = (
-                f"{job_string} "
-                f"-d {p.test_dataset} "
-                f"-s {split} "
-                f"-model_name {dataset_model} "
+                f"{DSQ_MODULES} "
+                f"srun python {run_script} results "
+                f"-d {dataset} "
+                f"-s {p.split} "
+                f"-model_name {model_name} "
                 f"-ckpt_path {ckpt_path} "
-                f"-overrides {cfg} "
-            )
-
-            if 'audiovisual-careful-whisper' in model_name:
-                token_fusion_ckpt = os.path.join(MODELS_DIR, 'logs/train/token-fusion', f"{p.train_dataset}/{utils.DATASET_CONFIG[p.train_dataset]['ckpt_path']}")
-
-                cmd += (
-                    f"-token_fusion_ckpt {token_fusion_ckpt}"
-                )
+                f"{overrides_str} "
+                f"-shuffle_context_dims {variant['shuffle']} "
+                f"-context_type {variant['context_type']} "
+                f"-av {variant['audiovisual']} "
+                f"{token_fusion_arg}"
+            ).strip()
 
             all_cmds.append(cmd)
-            job_num += 1
+            print(f'  [{dataset}/{variant_name}] {os.path.basename(ckpt_path)}')
 
-    dsq_base_string = f'dsq_{p.train_dataset}_careful_whisper_model_results'
-    logs_dir = os.path.join(BASE_DIR, 'derivatives/logs/behavioral/')
-    dsq_dir =  os.path.join(BASE_DIR, 'code/submit_scripts/behavioral/dsq')
-    joblists_dir = os.path.join(BASE_DIR, 'code/submit_scripts/behavioral/joblists')
+    if not all_cmds:
+        print('No jobs to submit.', flush=True)
+        sys.exit(0)
 
-    attempt_makedirs(logs_dir)
-    attempt_makedirs(dsq_dir)
-    attempt_makedirs(joblists_dir)
+    dsq_name   = 'dsq_careful_whisper_results'
+    joblist_fn = os.path.join(joblist_dir, 'careful_whisper_results.txt')
+    dsq_fn     = os.path.join(dsq_dir, f'{dsq_name}.sh')
+    log_dir    = os.path.join(logs_dir, dsq_name)
 
-    joblist_fn = os.path.join(joblists_dir, f'{p.train_dataset}_run_careful_whisper_results.txt')
+    attempt_makedirs(log_dir)
 
     with open(joblist_fn, 'w') as f:
         for cmd in all_cmds:
             f.write(f"{cmd}\n")
-    
-    dsq_batch_fn = os.path.join(dsq_dir, dsq_base_string)
-    dsq_out_dir = os.path.join(logs_dir, dsq_base_string)
-    array_fmt_width = len(str(job_num))
-    
-    if not os.path.exists(dsq_out_dir):
-        os.makedirs(dsq_out_dir)
-    
-    # subprocess.run('module load dSQ', shell=True)
-    subprocess.run(f"dsq --job-file {joblist_fn} --batch-file {dsq_batch_fn}.sh "
-        f"--status-dir {dsq_out_dir} --partition={PARTITION} --output={dsq_out_dir}/{dsq_base_string}-%A_%{array_fmt_width}a-%N.txt "
-        f"--time={TIME} --account={ACCOUNT} --nodes={N_NODES} --ntasks-per-node={N_TASKS_PER_NODE} --ntasks={N_TASKS} "
-        f"--exclude={EXCLUDE} --cpus-per-task={CPUS_PER_TASK} --mem-per-cpu={MEM_PER_CPU}", shell=True)
+    print(f'\nJoblist written: {joblist_fn} ({len(all_cmds)} jobs)')
+
+    write_dsq_script(dsq_fn, log_dir, joblist_fn, len(all_cmds),
+                     RESULTS_TIME, dsq_name, gpu=True)
+    print(f'DSQ script written: {dsq_fn}')
+    print(f'\nTo submit: sbatch {dsq_fn}')
+
+
+# -----------------------------------------------------------------------
+# Subcommand: results-subsets
+# -----------------------------------------------------------------------
+
+def run_results_subsets(p):
+    """Generate SLURM inference jobs for all base modalities × subset percentages × datasets."""
+
+    analysis_dir = os.path.join(BASE_DIR, 'code/analysis')
+    submit_dir   = os.path.join(analysis_dir, 'submit_scripts')
+    dsq_dir      = os.path.join(submit_dir, 'dsq')
+    joblist_dir  = os.path.join(submit_dir, 'joblists')
+    logs_dir     = os.path.join(BASE_DIR, 'derivatives', 'logs', 'careful-whisper', 'results')
+
+    for d in [dsq_dir, joblist_dir, logs_dir]:
+        attempt_makedirs(d)
+
+    run_script = os.path.join(analysis_dir, 'run_careful_whisper_results.py')
+    all_cmds   = []
+
+    for dataset in p.datasets:
+        for modality, cfg in _BASE_VARIANTS.items():
+            for pct in SUBSET_PERCENTAGES:
+                run_dir = f"{modality}_subset-{pct:03d}"
+
+                try:
+                    ckpt_path = find_model_checkpoint(dataset, run_dir)
+                except FileNotFoundError as e:
+                    print(f'WARNING: {e}', flush=True)
+                    continue
+
+                model_name    = f"{dataset}_{cfg['model_name_suffix']}_subset-{pct:03d}"
+                all_overrides = ['experiment=careful_whisper.yaml'] + cfg['overrides']
+                overrides_str = '-overrides ' + ' '.join(all_overrides)
+
+                token_fusion_arg = ''
+                if cfg['audiovisual']:
+                    try:
+                        tf_ckpt = find_token_fusion_checkpoint(dataset)
+                        token_fusion_arg = f'-token_fusion_ckpt {tf_ckpt}'
+                    except FileNotFoundError as e:
+                        print(f'WARNING: {e}', flush=True)
+                        continue
+
+                cmd = (
+                    f"{DSQ_MODULES} "
+                    f"srun python {run_script} results "
+                    f"-d {dataset} "
+                    f"-s {p.split} "
+                    f"-model_name {model_name} "
+                    f"-ckpt_path {ckpt_path} "
+                    f"{overrides_str} "
+                    f"-shuffle_context_dims 0 "
+                    f"-context_type {cfg['context_type']} "
+                    f"-av {cfg['audiovisual']} "
+                    f"{token_fusion_arg}"
+                ).strip()
+
+                all_cmds.append(cmd)
+                print(f'  [{dataset}/{run_dir}] {os.path.basename(ckpt_path)}')
+
+    if not all_cmds:
+        print('No jobs to submit.', flush=True)
+        sys.exit(0)
+
+    dsq_name   = 'dsq_careful_whisper_results_subsets'
+    joblist_fn = os.path.join(joblist_dir, 'careful_whisper_results_subsets.txt')
+    dsq_fn     = os.path.join(dsq_dir, f'{dsq_name}.sh')
+    log_dir    = os.path.join(logs_dir, dsq_name)
+
+    attempt_makedirs(log_dir)
+
+    with open(joblist_fn, 'w') as f:
+        for cmd in all_cmds:
+            f.write(f"{cmd}\n")
+    print(f'\nJoblist written: {joblist_fn} ({len(all_cmds)} jobs)')
+
+    write_dsq_script(dsq_fn, log_dir, joblist_fn, len(all_cmds),
+                     RESULTS_TIME, dsq_name, gpu=True)
+    print(f'DSQ script written: {dsq_fn}')
+    print(f'\nTo submit: sbatch {dsq_fn}')
+
+
+# -----------------------------------------------------------------------
+# Subcommand: analysis
+# -----------------------------------------------------------------------
+
+def run_analysis(p):
+    """Generate a lightweight SLURM analysis job (no GPU)."""
+
+    analysis_dir = os.path.join(BASE_DIR, 'code/analysis')
+    submit_dir   = os.path.join(analysis_dir, 'submit_scripts')
+    dsq_dir      = os.path.join(submit_dir, 'dsq')
+    joblist_dir  = os.path.join(submit_dir, 'joblists')
+    logs_dir     = os.path.join(BASE_DIR, 'derivatives', 'logs', 'careful-whisper', 'analysis')
+
+    for d in [dsq_dir, joblist_dir, logs_dir]:
+        attempt_makedirs(d)
+
+    run_script   = os.path.join(analysis_dir, 'run_careful_whisper_results.py')
+    datasets_str = ' '.join(p.datasets)
+
+    cmd = (
+        f"{DSQ_MODULES} "
+        f"srun python {run_script} analysis "
+        f"-d {datasets_str} "
+        f"-s {p.split}"
+    ).strip()
+
+    dsq_name   = 'dsq_careful_whisper_analysis'
+    joblist_fn = os.path.join(joblist_dir, 'careful_whisper_analysis.txt')
+    dsq_fn     = os.path.join(dsq_dir, f'{dsq_name}.sh')
+    log_dir    = os.path.join(logs_dir, dsq_name)
+
+    attempt_makedirs(log_dir)
+
+    with open(joblist_fn, 'w') as f:
+        f.write(f"{cmd}\n")
+    print(f'Joblist written: {joblist_fn} (1 job)')
+
+    write_dsq_script(dsq_fn, log_dir, joblist_fn, 1,
+                     ANALYSIS_TIME, dsq_name, gpu=False)
+    print(f'DSQ script written: {dsq_fn}')
+    print(f'\nTo submit: sbatch {dsq_fn}')
+
+
+# -----------------------------------------------------------------------
+# Entry point
+# -----------------------------------------------------------------------
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(
+        description='Generate SLURM jobs for CarefulWhisper results and analysis.',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    subparsers = parser.add_subparsers(dest='subcommand', required=True)
+
+    # ---- results subcommand ----
+    res_p = subparsers.add_parser(
+        'results',
+        help='Generate inference jobs (all model variants × datasets)',
+    )
+    res_p.add_argument('-d', '--datasets', type=str, nargs='+',
+                       default=['lrs3', 'avspeech', 'voxceleb2'])
+    res_p.add_argument('-s', '--split', type=str, default='test')
+
+    # ---- results-subsets subcommand ----
+    sub_p = subparsers.add_parser(
+        'results-subsets',
+        help='Generate inference jobs for subset models (all modalities × subset percentages × datasets)',
+    )
+    sub_p.add_argument('-d', '--datasets', type=str, nargs='+',
+                       default=['lrs3', 'avspeech', 'voxceleb2'])
+    sub_p.add_argument('-s', '--split', type=str, default='test')
+
+    # ---- analysis subcommand ----
+    an_p = subparsers.add_parser(
+        'analysis',
+        help='Generate analysis job (compute ΔI from saved CSVs; no subsets)',
+    )
+    an_p.add_argument('-d', '--datasets', type=str, nargs='+',
+                      default=['lrs3', 'avspeech', 'voxceleb2'])
+    an_p.add_argument('-s', '--split', type=str, default='test')
+
+    p = parser.parse_args()
+
+    if p.subcommand == 'results':
+        run_results(p)
+    elif p.subcommand == 'results-subsets':
+        run_results_subsets(p)
+    else:
+        run_analysis(p)

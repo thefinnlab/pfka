@@ -11,6 +11,13 @@ token_fusion_weights: null
 preload: False
 ckpt_path: null
 
+# Control condition: shuffle each token's context embedding dims independently at load time.
+# When shuffle_context_dims=True, context_type determines which feature to shuffle.
+# If context_type='prominence', prominence is also projected 1D→context_embed_dim first.
+shuffle_context_dims: False
+context_type: ${model.config.context_type}
+context_embed_dim: ${model.config.embed_dim}
+
 subset_percentage: null
 
 num_workers: 0

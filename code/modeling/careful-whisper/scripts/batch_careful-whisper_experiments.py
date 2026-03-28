@@ -1,51 +1,41 @@
 import sys, os
-import glob
 import argparse
-import subprocess
 import numpy as np
 
 from config import *
 import utils
 
-PARTITION='preemptable'
-TIME = '24:00:00'
+# SLURM settings
+TIME = '3-00:00:00'
+EXCLUDE = 'p04'
+CPUS_PER_TASK = 16
+MEM_PER_CPU = '8G'
+PARTITION = 'gpuq'
+GPU_INFO = '--gres=gpu:1'
 N_NODES = 1
 N_TASKS_PER_NODE = 1
 N_TASKS = 1
-CPUS_PER_TASK = 8
-MEM_PER_CPU = '8G'
-GPU_INFO = ''
+ACCOUNT = 'dbic'
 
-TIME = '3-00:00:00'
-EXCLUDE = ''#'p02,p03'
-CPUS_PER_TASK = 16
-MEM_PER_CPU = '8G'
-PARTITION = 'v100_preemptable'
-GPU_INFO = '--gres=gpu:1'
-NODE_LIST = 'a01'#--nodelist=a03,a04'
-ACCOUNT = 'dbic' #dbic
+# Usage:
+#   Single type:
+#     python batch_careful-whisper_experiments.py -d lrs3 -m audio
+#     python batch_careful-whisper_experiments.py -d voxceleb2 -m audio --subsets 1
+#
+#   All types for a dataset (bash):
+#     for m in text audio prosody audiovisual audio-control prosody-control audiovisual-control; do
+#         python batch_careful-whisper_experiments.py -d lrs3 -m $m
+#     done
+#
+#   Subsets (voxceleb2 only):
+#     for m in text audio prosody audiovisual; do
+#         python batch_careful-whisper_experiments.py -d voxceleb2 -m $m --subsets 1
+#     done
+#
+# NOTE: audiovisual and audiovisual-control require a token-fusion checkpoint.
+#       Update utils.DATASET_CONFIG with the correct epoch after rerunning token fusion.
 
 DATASET_INFO = {
-    'gigaspeech-m': [
-        'data.dataset_name=gigaspeech-m',
-        'data.data_dir=\${paths.data_dir}/gigaspeech/m',
-        'data.cache_dir=\${paths.cache_dir}/nlp-datasets/gigaspeech/m',
-    ],
-    'libritts-r': [
-        'data.dataset_name=libritts-r',
-        'data.data_dir=\${paths.data_dir}/libritts-r',
-        'data.cache_dir=\${paths.cache_dir}/nlp-datasets/libritts-r',
-    ],
-    'tedlium': [
-        'data.dataset_name=tedlium',
-        'data.data_dir=\${paths.data_dir}/tedlium',
-        'data.cache_dir=\${paths.cache_dir}/nlp-datasets/tedlium',
-    ],
-    'peoples-speech': [
-        'data.dataset_name=peoples-speech',
-        'data.data_dir=\${paths.data_dir}/peoples-speech',
-        'data.cache_dir=\${paths.cache_dir}/nlp-datasets/peoples-speech',
-    ],
     'lrs3': [
         'data.dataset_name=lrs3',
         'data.data_dir=\${paths.data_dir}/lrs3',
@@ -61,15 +51,94 @@ DATASET_INFO = {
     'av-combined': [
         'data.dataset_name=av-combined',
         'data.data_dir=\${paths.data_dir}/av-combined',
-    ]
+    ],
 }
 
+# Each model_type maps to {run_name: [hydra overrides]}.
+# run_name is used for wandb.name and hydra.run.dir.
+# Audiovisual types have their ckpt_path injected at runtime from utils.DATASET_CONFIG.
+MODEL_TYPE_CONFIGS = {
+
+    'text': {
+        'text': [
+            "model.config.cross_attention=False",
+            "model.config.use_causal_cross_attention=False",
+        ],
+    },
+
+    'audio': {
+        'audio': [
+            "model.config.cross_attention=True",
+            "model.config.use_causal_cross_attention=True",
+            "model.config.context_embed_dropout=0.1",
+            "model.config.context_pos_embed=True",
+        ],
+    },
+
+    'prosody': {
+        'prosody': [
+            "model.config.cross_attention=True",
+            "model.config.use_causal_cross_attention=True",
+            "model.config.context_type=prominence",
+            "model.config.context_dim=1",
+            "model.config.context_embed_dropout=0.1",
+            "model.config.context_pos_embed=True",
+        ],
+    },
+
+    'audiovisual': {
+        'audiovisual': [
+            "model.config.cross_attention=True",
+            "model.config.use_causal_cross_attention=True",
+            "model.config.context_type=audiovisual_features",
+            "model.config.context_embed_dropout=0.1",
+            "model.config.context_pos_embed=True",
+            "data.token_fusion_method=mlp",
+            # ckpt_path injected below
+        ],
+    },
+
+    'audio-control': {
+        'audio-shuffled': [
+            "model.config.cross_attention=True",
+            "model.config.use_causal_cross_attention=True",
+            "model.config.context_embed_dropout=0.1",
+            "model.config.context_pos_embed=True",
+            "data.shuffle_context_dims=True",
+        ],
+    },
+
+    'prosody-control': {
+        'prosody-shuffled': [
+            "model.config.cross_attention=True",
+            "model.config.use_causal_cross_attention=True",
+            "model.config.context_type=prominence",
+            "model.config.context_dim=null",
+            "model.config.context_embed_dropout=0.1",
+            "model.config.context_pos_embed=True",
+            "data.shuffle_context_dims=True",
+        ],
+    },
+
+    'audiovisual-control': {
+        'audiovisual-shuffled': [
+            "model.config.cross_attention=True",
+            "model.config.use_causal_cross_attention=True",
+            "model.config.context_type=audiovisual_features",
+            "model.config.context_embed_dropout=0.1",
+            "model.config.context_pos_embed=True",
+            "data.token_fusion_method=mlp",
+            # ckpt_path injected below
+            "data.shuffle_context_dims=True",
+        ],
+    },
+}
+
+
 def create_model_variations(base_configs, subset_percentages=None):
-    """Create model config variations for different subset sizes."""
+    """Return {run_name: [overrides]} optionally expanded across subset sizes."""
     variations = {}
-    
-    for model_name, config in base_configs.items():        
-        # Add subset versions
+    for model_name, config in base_configs.items():
         if subset_percentages is not None:
             for subset in subset_percentages:
                 subset_name = f"{model_name}_subset-{str(subset).zfill(3)}"
@@ -77,166 +146,51 @@ def create_model_variations(base_configs, subset_percentages=None):
                 subset_config.append(f"data.subset_percentage={subset}")
                 variations[subset_name] = subset_config
         else:
-            # Full dataset version
             variations[model_name] = config.copy()
-            
     return variations
 
+
 if __name__ == "__main__":
- 
+
     parser = argparse.ArgumentParser()
-    parser.add_argument('-d', '--dataset', type=str)
-    parser.add_argument('-model_type', '--model_type', type=str)
-    parser.add_argument('-subsets', '--subsets', type=int, default=0)
-    # parser.add_argument('-o', '--overwrite', type=int, default=0)
-    
+    parser.add_argument('-d', '--dataset', type=str, required=True,
+                        choices=list(DATASET_INFO.keys()))
+    parser.add_argument('-m', '--model_type', type=str, required=True,
+                        choices=list(MODEL_TYPE_CONFIGS.keys()),
+                        help='Model type to generate jobs for')
+    parser.add_argument('--subsets', type=int, default=0,
+                        help='Generate subset-size jobs instead of full-data jobs (pass 1 to enable)')
     p = parser.parse_args()
 
     EXPERIMENT_NAME = 'careful_whisper'
-    
-    MODEL_CONFIGS = {
 
-        # General GPT2-esque model
-        'text-careful-whisper_no-xattn': [
-            f"model.config.cross_attention=False",
-            f"model.config.use_causal_cross_attention=False",
-        ],
+    # Deep-copy to avoid mutating the module-level dict
+    base_configs = {k: list(v) for k, v in MODEL_TYPE_CONFIGS[p.model_type].items()}
 
-        # # Whisper w/ CLM integration
-        # 'audio-careful-whisper_causal-xattn': [
-        #     f"model.config.cross_attention=True",
-        #     f"model.config.use_causal_cross_attention=True",
+    # Inject token-fusion checkpoint path for audiovisual models
+    if p.model_type in ('audiovisual', 'audiovisual-control'):
+        ckpt_rel = utils.DATASET_CONFIG[p.dataset]['ckpt_path']
+        ckpt_override = (
+            "data.ckpt_path=\${paths.log_dir}train/token-fusion/"
+            f"{p.dataset}/{ckpt_rel}"
+        )
+        for name in base_configs:
+            base_configs[name].append(ckpt_override)
 
-        #     # Add in dropout and position embedding
-        #     f"model.config.context_embed_dropout=0.1",
-        #     f"model.config.context_pos_embed=True",
-        # ],
+    # Subset percentages: log-spaced 2–25%, then linear 30–70%
+    if p.subsets == 1:
+        subset_pcts = np.logspace(0.3, 1.4, 10) / 100
+        subset_pcts = np.concatenate((subset_pcts, np.arange(0.3, 1.0, 0.1)))
+        subset_percentages = (100 * np.sort(np.round(subset_pcts, 2))).astype(int)
+    else:
+        subset_percentages = None
 
-        # # Whisper w/ CLM integration
-        # 'audiovisual-careful-whisper_causal-xattn_token-fusion-mlp': [
-        #     f"model.config.cross_attention=True",
-        #     f"model.config.use_causal_cross_attention=True",
+    MODEL_CONFIGS = create_model_variations(base_configs, subset_percentages)
 
-        #     # Prosody embedding information
-        #     f"model.config.context_type=audiovisual_features",
-        #     f"model.config.context_embed_dropout=0.1",
-        #     f"model.config.context_pos_embed=True",
-        #     # f"model.optimizer.lr=5e-5",
-
-        #     # How to fusion AV tokens
-        #     f'data.token_fusion_method=mlp',
-        #     "data.ckpt_path=\${paths.log_dir}train/token-fusion/" + f"{p.dataset}/{utils.DATASET_CONFIG[p.dataset]['ckpt_path']}"
-        # ],
-
-        # # Whisper w/ CLM integration
-        # 'prosody-careful-whisper_causal-xattn': [
-        #     f"model.config.cross_attention=True",
-        #     f"model.config.use_causal_cross_attention=True",
-
-        #     # Prosody embedding information
-        #     f"model.config.context_type=prominence",
-        #     f"model.config.context_dim=1",
-        #     f"model.config.context_embed_dropout=0.1",
-        #     f"model.config.context_pos_embed=True",
-
-        # ],
-
-        # # Whisper w/ CLM integration
-        # 'visual-careful-whisper_causal-xattn': [
-        #     f"model.config.cross_attention=True",
-        #     f"model.config.use_causal_cross_attention=True",
-
-        #     # Prosody embedding information
-        #     f"model.config.context_type=video_features",
-        #     f"model.config.context_embed_dropout=0.1",
-        #     f"model.config.context_pos_embed=True",
-
-        # ],
-
-        # # Whisper w/ CLM integration
-        # 'careful-whisper_audio-token-fusion': [
-        #     f"model.config.token_fusion=True",
-        # ],
-
-        # # Whisper w/ CLM integration
-        # 'prosody-whisper_token-fusion': [
-        #     f"model.config.token_fusion=True",
-
-        #     # Prosody embedding information
-        #     f"model.config.context_type=prominence",
-        #     f"model.config.context_dim=1",
-        # ],
-
-
-        # # Whisper w/ CLM integration
-        # 'careful-whisper_audio-xattn_shuffled': [
-        # 	f"model.config.shuffle_context=True",
-        # 	f"model.config.cross_attention=True",
-        # 	f"model.config.use_causal_cross_attention=True",
-        # ],
-
-
-        # # Whisper w/ CLM integration
-        # 'careful-whisper_audio-embed-only': [
-        # 	f"model.config.embed_type=audio_inputs",
-        # 	f"model.config.cross_attention=False",
-        # 	f"model.config.use_causal_cross_attention=False",
-        # ]
-
-        # # Switch self-attention to audio paying attention to text
-        # 'careful-whisper_causal-xattn_inverse-audio-text': [
-        # 	f"model.config.cross_attention=True",
-        # 	f"model.config.use_causal_cross_attention=True",
-
-        # 	# Audio information
-        # 	f"model.config.context_embed_dropout=0.1",
-        # 	f"model.config.context_pos_embed=True",
-        # 	f"model.config.inverse_audio_text=True",
-
-        # ],
-
-        # Controlling for the number of model parameters
-        # 'careful-whisper_no-xattn_parameter-control': [
-        # 	f"model.config.num_layers=18",
-        # ],
-
-        # Seeing if bidirectional cross attention works
-        # 'careful-whisper_causal-bi-xattn': [
-        # 	f"model.config.bidirectional_cross_attention=True",
-        # 	f"model.config.use_causal_cross_attention=True",
-        # ],
-
-        # # Matched architecture to GPT2 (same embed dim + num_heads)
-        # 'careful-whisper_gpt2-control': [
-        # 	f"model.config.embed_dim=768",
-        # 	f"model.config.num_heads=12",
-        # 	f"model.config.cross_attention=False",
-        # 	f"model.config.use_causal_cross_attention=False",
-        # ],
-
-        # # Whisper w/ CLM integration
-        # 'careful-whisper_causal-xattn_num-layers-6': [
-        #     f"model.config.num_layers=6",
-        #     f"model.config.cross_attention=True",
-        #     f"model.config.use_causal_cross_attention=True",
-
-        #     # Add in dropout and position embedding
-        #     f"model.config.context_embed_dropout=0.1",
-        #     f"model.config.context_pos_embed=True",
-        # ],
-
-        # # General GPT2-esque model
-        # 'careful-whisper_no-xattn_num-layers-6': [
-        #     f"model.config.num_layers=6",
-        #     f"model.config.cross_attention=False",
-        #     f"model.config.use_causal_cross_attention=False",
-        # ],
-    }
-
-    # make directories
+    # Make output directories
     dsq_dir = os.path.join(SUBMIT_DIR, 'dsq')
     joblist_dir = os.path.join(SUBMIT_DIR, 'joblists')
-    logs_dir = os.path.join(LOGS_DIR)
+    logs_dir = LOGS_DIR
 
     utils.attempt_makedirs(dsq_dir)
     utils.attempt_makedirs(joblist_dir)
@@ -247,61 +201,32 @@ if __name__ == "__main__":
     job_string = f'{DSQ_MODULES} srun python {script_fn}'
     job_num = 0
 
-    # Dataset overrides --> set up dataset
     dataset_config = ' '.join(DATASET_INFO[p.dataset])
-
-    # Define subset percentages and create model variations
-
-    # # Log space 2 - 25% 
-    subset_percentages = np.logspace(0.3, 1.4, 10) / 100
-
-    # 30% - 100% 
-    subset_percentages = np.concatenate((
-        subset_percentages,
-        np.arange(0.3, 1, 0.1)
-    ))
-
-    # Scale to percentages and apply if needed
-    subset_percentages = (100 * np.sort(np.round(subset_percentages, 2))).astype(int) if p.subsets else None
-
-    MODEL_CONFIGS = create_model_variations(MODEL_CONFIGS, subset_percentages)
-
-    wandb_group = 'full-data' if not p.subsets else 'subsets'
-    counter = 0
-
-    # Rerun text = jobs 1-4
-    failed_jobs = [1,2,3,4]
+    wandb_job_type = 'subsets' if p.subsets == 1 else 'full-data'
 
     for model_name, model_config in MODEL_CONFIGS.items():
 
-        if (counter not in failed_jobs): # and (counter < 9):
-            counter += 1
-            continue
+        model_config_str = ' '.join(model_config)
 
-        counter += 1
-        print (model_name)
+        # wandb group = base name without _subset-XXX suffix
+        wandb_group = model_name.split('_subset-')[0]
 
-        # Model config --> change model configurations
-        model_config = ' '.join(model_config)
-        
-        # Logger overrides --> change the name based on the dataset
         wandb_config = (
             f"logger.wandb.project={p.dataset}-audiovisual "
             f"logger.wandb.name={model_name} "
-            f"logger.wandb.group={model_name.split('_')[0]} "
-            f"logger.wandb.job_type={wandb_group} "
+            f"logger.wandb.group={wandb_group} "
+            f"logger.wandb.job_type={wandb_job_type} "
         )
 
         hydra_config = (
             "hydra.run.dir=\${paths.log_dir}/\${task_name}/careful-whisper/"
-            f"{p.dataset}/"
-            f"{model_name}/"
+            f"{p.dataset}/{model_name}/"
         )
 
         cmd = (
             f"{job_string} "
             f"experiment={EXPERIMENT_NAME}.yaml "
-            f"{model_config} "
+            f"{model_config_str} "
             f"{dataset_config} "
             f"{wandb_config} "
             f"{hydra_config} "
@@ -311,24 +236,15 @@ if __name__ == "__main__":
         job_num += 1
 
     if not all_cmds:
-        print (f'No model needing extraction - overwrite if you want to redo extraction', flush=True)
+        print('No jobs to submit', flush=True)
         sys.exit(0)
 
-    joblist_fn = os.path.join(joblist_dir, f'{p.dataset}-{p.model_type}_careful_whisper_experiments.txt')
+    joblist_fn = os.path.join(
+        joblist_dir, f'{p.dataset}-{p.model_type}_careful_whisper_experiments.txt'
+    )
 
     with open(joblist_fn, 'w') as f:
         for cmd in all_cmds:
             f.write(f"{cmd}\n")
-    
-    dsq_base_string = f'dsq_{p.dataset}-{p.model_type}_careful_whisper_experiments'
-    dsq_batch_fn = os.path.join(dsq_dir, dsq_base_string)
-    dsq_out_dir = os.path.join(logs_dir, dsq_base_string)
-    array_fmt_width = len(str(job_num)) 
 
-    if not os.path.exists(dsq_out_dir):
-        os.makedirs(dsq_out_dir)
-    
-    subprocess.run(f"dsq --job-file {joblist_fn} --batch-file {dsq_batch_fn}.sh "
-        f"--status-dir {dsq_out_dir} --partition={PARTITION} --output={dsq_out_dir}/{dsq_base_string}-%A_%{array_fmt_width}a-%N.txt "
-        f"--time={TIME} --account={ACCOUNT} --nodes={N_NODES} {GPU_INFO} --ntasks-per-node={N_TASKS_PER_NODE} --ntasks={N_TASKS} "
-        f"--exclude={EXCLUDE} --cpus-per-task={CPUS_PER_TASK} --mem-per-cpu={MEM_PER_CPU}", shell=True)
+    print(f"Joblist written: {joblist_fn} ({job_num} jobs)")

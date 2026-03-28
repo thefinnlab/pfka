@@ -8,6 +8,7 @@ import numpy as np
 import json
 
 import torch
+import torch.nn as nn
 from torch.utils.data import Dataset
 from torch.nn import functional as F
 
@@ -29,6 +30,9 @@ class AudioTextDataset(Dataset):
         token_fusion_weights: Optional[List[float]] = None,
         preload: bool = False,  # New preload option
         ckpt_path: str = None,
+        shuffle_context_dims: bool = False,
+        context_type: str = 'audio_features',
+        context_embed_dim: int = 1024,
     ):
         super().__init__()
 
@@ -56,6 +60,12 @@ class AudioTextDataset(Dataset):
         self.token_fusion_weights = token_fusion_weights
         self.preload = preload
         self.ckpt_path = ckpt_path
+        self.shuffle_context_dims = shuffle_context_dims
+        self.context_type = context_type
+
+        if self.shuffle_context_dims and context_type == 'prominence':
+            self.prominence_proj = nn.Linear(1, context_embed_dim, bias=False)
+            self.prominence_proj.weight.requires_grad = False
 
         if self.token_fusion_method == 'mlp' and self.ckpt_path is not None:
             
@@ -105,8 +115,9 @@ class AudioTextDataset(Dataset):
         item.update(
             {x: torch.tensor(data[x]) for x in ['text_tokens', 'attention_mask', 'prominence', 'boundary']}
         )
-        
+
         # Load audio features if exists
+
         if 'audio_features_path' in data:
             audio_features = torch.load(data['audio_features_path'])
             item['audio_features'] = torch.nan_to_num(audio_features)
@@ -141,6 +152,21 @@ class AudioTextDataset(Dataset):
                     )[-1]
 
             item['audiovisual_features'] = torch.nan_to_num(av_features)
+
+        if self.shuffle_context_dims:
+            # If prominence is the context, project it from 1D → N first
+            if self.context_type == 'prominence':
+                prom = item['prominence'].float().unsqueeze(-1)       # (seq_len, 1)
+                with torch.no_grad():
+                    item['prominence'] = self.prominence_proj(prom)   # (seq_len, N)
+
+            # Shuffle each token's context dims independently, deterministic per sample
+            ctx = item[self.context_type]                             # (seq_len, N)
+            gen = torch.Generator()
+            gen.manual_seed(idx)
+            T, N = ctx.shape
+            perms = torch.stack([torch.randperm(N, generator=gen) for _ in range(T)])
+            item[self.context_type] = ctx.gather(1, perms)
 
         return item
     

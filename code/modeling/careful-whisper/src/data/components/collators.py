@@ -37,8 +37,11 @@ def audio_text_collator(batch, pad_token=-999):
     result["text_tokens"] = pad_sequence(store['text_tokens'], batch_first=True, padding_value=pad_token)
     result["attention_mask"] = pad_sequence(store['attention_mask'], batch_first=True, padding_value=0)
     
-    # Pad prominence and boundary, adding an extra dimension
-    result["prominence"] = pad_sequence(store['prominence'], batch_first=True, padding_value=0).unsqueeze(-1)
+    # Pad prominence (handles both 1D scalar and 2D pre-projected)
+    if store['prominence'][0].dim() == 1:
+        result["prominence"] = pad_sequence(store['prominence'], batch_first=True, padding_value=0).unsqueeze(-1)
+    else:
+        result["prominence"] = pad_feature_tensor(store['prominence'])
     result["boundary"] = pad_sequence(store['boundary'], batch_first=True, padding_value=0).unsqueeze(-1)
     
     # Convert attention mask to same dtype as other tensors

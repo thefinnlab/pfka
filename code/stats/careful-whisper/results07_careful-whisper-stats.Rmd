@@ -21,7 +21,7 @@ source("../utils/utils.R")
 install_and_load()
 
 # Set the paths for this notebook
-set_paths(analysis_name="behavioral", plots_name="careful-whisper")
+set_paths(analysis_name="careful-whisper", plots_name="careful-whisper")
 ```
 
 # Careful Whisper analyses
@@ -39,86 +39,238 @@ We create a contrast of modality such that we test the hypothesis that multimoda
 
 results_fn <- file.path(results_dir, "all-dataset-av-main_careful-whisper_all-results_batch-size-32.csv")
 
-# Load data and convert columns to factors
-df_results <- load_and_prepare_data(
+# Load full data (includes both main and shuffled models)
+df_all <- load_and_prepare_data(
   file_path=results_fn,
   factor_columns=c('batch_number', 'model_name', 'dataset')
 )
 
-# Set the levels for the modality column
-df_results <- set_factor_levels(
-  df=df_results,
+# Set factor levels and contrasts on the full dataset before splitting
+df_all <- set_factor_levels(
+  df=df_all,
   column_name="model_name",
-  levels=c("GPT2", "ProsodyXAttn", "AudioXAttn", "AudioVisualXAttn")
+  levels=c("SD", "PA", "AC", "AVC")
 )
 
-df_results <- create_column_contrast(
-  df=df_results, 
+df_all <- create_column_contrast(
+  df=df_all,
   column_name="model_name",
   n_poly=3
 )
+
+df_all$is_shuffled <- as.logical(df_all$is_shuffled)
+
+# Main models only (is_shuffled == FALSE)
+df_results <- df_all[!df_all$is_shuffled, ]
+
+# Shuffled control frame: SD main rows + PA/AC/AVC shuffled rows
+df_shuffled <- rbind(
+  df_all[df_all$model_name == "SD" & !df_all$is_shuffled, ],
+  df_all[df_all$is_shuffled, ]
+)
+
 ```
 
 ## Analysis 1A - Accuracy of models
+
+### Analysis 1A.1 - Main models
 
 ```{r}
 
 accuracy_formula <- 'accuracy ~ model_name + (1|batch_number:dataset)'
 
-# Fit the logistic mixed-effects model
 model <- lmer(
-  accuracy_formula, 
-  data=df_results, 
+  accuracy_formula,
+  data=df_results,
 )
 
 tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
 
-# Display results of fixed effects
 display_model_summary(model)
 
 summary(model)
 
-# Conduct pairwise comparisons between modalities
 pairwise_comparisons <- emmeans(model, pairwise ~ model_name)
 display_pairwise_comparisons(pairwise_comparisons)
 
 plot_model(model, type=c("pred"))
 
-# # Fit orthogonal polynomial explicitly
-# df_results$poly_model <- poly(as.numeric(df_results$model_name), 3)
-# 
-# ggplot(df_results, aes(x = as.numeric(model_name), y = accuracy)) +
-#   geom_point(alpha = 0.3) +
-#   geom_smooth(method = "lm", formula = y ~ poly(x, 1), se = FALSE, color="blue") + # linear
-#   geom_smooth(method = "lm", formula = y ~ poly(x, 2), se = FALSE, color="green")+ # quadratic
-#   geom_smooth(method = "lm", formula = y ~ poly(x, 3), se = FALSE, color="red")     # cubic
+```
+
+### Analysis 1A.2 - Shuffled (sensory control) models
+
+Tests whether each shuffled model performs at the level of the SD baseline using an LME on a frame containing SD (main) and the shuffled PA/AC/AVC rows. SD serves as the unshuffled reference; pairwise comparisons test each shuffled model against it.
+
+```{r}
+
+model_shuffled <- lmer(
+  accuracy_formula,
+  data=df_shuffled,
+)
+
+tab_model(model_shuffled, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+display_model_summary(model_shuffled)
+
+summary(model_shuffled)
+
+pairwise_comparisons <- emmeans(model_shuffled, pairwise ~ model_name)
+display_pairwise_comparisons(pairwise_comparisons)
+
+plot_model(model_shuffled, type=c("pred"))
+
 ```
 
 
 ## Analysis 1B - Perplexity of models
 
+### Analysis 1B.1 - Main models
+
 ```{r}
 
 perplexity_formula <- 'perplexity ~ model_name + (1|batch_number:dataset)'
 
-# Fit the logistic mixed-effects model
 model <- lmer(
-  perplexity_formula, 
-  data=df_results, 
+  perplexity_formula,
+  data=df_results,
 )
 
 tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
 
 summary(model)
 
-# Display results of fixed effects
 display_model_summary(model)
 
-# Conduct pairwise comparisons between modalities
 pairwise_comparisons <- emmeans(model, pairwise ~ model_name)
 display_pairwise_comparisons(pairwise_comparisons)
+
 ```
 
+### Analysis 1B.2 - Shuffled (sensory control) models
+
+```{r}
+
+model_shuffled <- lmer(
+  perplexity_formula,
+  data=df_shuffled,
+)
+
+tab_model(model_shuffled, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+summary(model_shuffled)
+
+display_model_summary(model_shuffled)
+
+pairwise_comparisons <- emmeans(model_shuffled, pairwise ~ model_name)
+display_pairwise_comparisons(pairwise_comparisons)
+
+plot_model(model_shuffled, type=c("pred"))
+
+```
+
+## Analysis 1C - Information gain of models 
+
+### Analysis 1C.1 - Main models --> greater than SD
+
+```{r}
+
+information_formula <- 'I_total ~ 0 + model_name + (1|batch_number:dataset)'
+
+df_information <- df_results[df_results$model_name != "SD", ]
+
+df_information <- set_factor_levels(
+  df_information,
+  column_name="model_name",
+  levels=c("PA", "AC", "AVC")
+)
+
+model_information <- lmer(
+  information_formula,
+  data=df_information,
+)
+
+tab_model(model_information, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+summary(model_information)
+
+display_model_summary(model_information)
+
+pairwise_comparisons <- emmeans(model_information, pairwise ~ model_name)
+display_pairwise_comparisons(pairwise_comparisons)
+
+plot_model(model_information, type=c("pred"))
+
+```
+
+### Analysis 1C.2 - Control models (less than SD)
+
+```{r}
+
+information_formula <- 'I_total ~ 0 + model_name + (1|batch_number:dataset)'
+
+df_information_shuffled <- df_shuffled[df_shuffled$model_name != "SD", ]
+
+df_information_shuffled <- set_factor_levels(
+  df_information_shuffled,
+  column_name="model_name",
+  levels=c("PA", "AC", "AVC")
+)
+
+model_information <- lmer(
+  information_formula,
+  data=df_information_shuffled,
+)
+
+tab_model(model_information, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+summary(model_information)
+
+display_model_summary(model_information)
+
+pairwise_comparisons <- emmeans(model_information, pairwise ~ model_name)
+display_pairwise_comparisons(pairwise_comparisons)
+
+plot_model(model_information, type=c("pred"))
+
+```
+
+### Analysis 1C.3 - Main models trend
+
+```{r}
+
+information_formula <- 'I_total ~ model_name + (1|batch_number:dataset)'
+
+df_information <- df_results[df_results$model_name != "SD", ]
+
+df_information <- set_factor_levels(
+  df_information,
+  column_name="model_name",
+  levels=c("PA", "AC", "AVC")
+)
+
+df_information <- create_column_contrast(
+  df_information,
+  column_name = "model_name",
+  n_poly = 2
+)
+
+model_information <- lmer(
+  information_formula,
+  data=df_information,
+)
+
+tab_model(model_information, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+summary(model_information)
+
+display_model_summary(model_information)
+
+pairwise_comparisons <- emmeans(model_information, pairwise ~ model_name)
+display_pairwise_comparisons(pairwise_comparisons)
+
+plot_model(model_information, type=c("pred"))
+
+```
 
 ## Analysis 2 - Subset analysis
 
@@ -136,8 +288,8 @@ df_results <- load_and_prepare_data(
 # Set the levels for the modality column
 df_results <- set_factor_levels(
   df=df_results,
-  column_name="main_model",
-  levels=c("GPT2", "ProsodyXAttn", "AudioXAttn", "AudioVisualXAttn")
+  column_name="main_model", 
+  levels=c("SD", "PA", "AC", "AVC")
 )
 
 df_results <- create_column_contrast(
@@ -210,18 +362,18 @@ plot_model(model, type='pred', terms=c('true_subset', 'main_model'))
 ```{r}
 
 # set order of variables
-df_cleaned <- df_results[df_results$main_model != 'GPT2',]
+df_cleaned <- df_results[df_results$main_model != 'SD',]
 df_cleaned <- remove_outliers(df_cleaned, 'subset_accuracy_ratio')
 
 # Set the levels for the modality column
 df_cleaned <- set_factor_levels(
   df=df_cleaned,
   column_name="main_model",
-  levels=c("ProsodyXAttn", "AudioXAttn", "AudioVisualXAttn")
+  levels=c("PA", "AC", "AVC")
 )
 
 df_cleaned <- create_column_contrast(
-  df=df_cleaned, 
+  df=df_cleaned,
   column_name="main_model",
   n_poly=2
 )
@@ -247,18 +399,18 @@ plot_model(model, type='pred', terms=c('true_subset', 'main_model')) #, show.dat
 ```{r}
 
 # set order of variables
-df_cleaned <- df_results[df_results$main_model != 'GPT2',]
+df_cleaned <- df_results[df_results$main_model != 'SD',]
 df_cleaned <- remove_outliers(df_cleaned, 'subset_accuracy_ratio')
 
 # Set the levels for the modality column
 df_cleaned <- set_factor_levels(
   df=df_cleaned,
   column_name="main_model",
-  levels=c("ProsodyXAttn", "AudioXAttn", "AudioVisualXAttn")
+  levels=c("PA", "AC", "AVC")
 )
 
 df_cleaned <- create_column_contrast(
-  df=df_cleaned, 
+  df=df_cleaned,
   column_name="main_model",
   n_poly=2
 )
@@ -277,6 +429,81 @@ summary(model)
 tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
 # 
 plot_model(model, type='pred', terms=c('true_subset', 'main_model')) #, show.data=TRUE)
+
+```
+
+## Analysis 3 - Information gain
+
+```{r}
+
+# IG values are in the main results CSV (merged per-batch); subset to non-SD main models
+df_ig <- df_results[
+  df_results$model_name %in% c("PA", "AC", "AVC") &
+  !is.na(df_results$delta_I),
+  c("batch_number", "dataset", "model_name", "I_total", "I_scr", "delta_I", "delta_I_raw")
+]
+
+df_ig$modality <- df_ig$model_name
+
+df_ig <- set_factor_levels(
+  df=df_ig,
+  column_name="modality",
+  levels=c("PA", "AC", "AVC")
+)
+
+df_ig <- create_column_contrast(
+  df=df_ig,
+  column_name="modality",
+  n_poly=2
+)
+
+```
+
+### Analysis 3A - Structured information gain (delta_I)
+
+```{r}
+
+delta_I_formula <- 'delta_I ~ modality + (1|batch_number:dataset)'
+
+model_ig <- lmer(
+  delta_I_formula,
+  data=df_ig,
+)
+
+tab_model(model_ig, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+summary(model_ig)
+
+display_model_summary(model_ig)
+
+pairwise_comparisons <- emmeans(model_ig, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+plot_model(model_ig, type=c("pred"))
+
+```
+
+### Analysis 3B - Total information gain (I_total)
+
+```{r}
+
+I_total_formula <- 'I_total ~ modality + (1|batch_number:dataset)'
+
+model_itotal <- lmer(
+  I_total_formula,
+  data=df_ig,
+)
+
+tab_model(model_itotal, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+summary(model_itotal)
+
+display_model_summary(model_itotal)
+
+pairwise_comparisons <- emmeans(model_itotal, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+plot_model(model_itotal, type=c("pred"))
 
 ```
 

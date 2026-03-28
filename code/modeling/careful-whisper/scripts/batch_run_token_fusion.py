@@ -22,8 +22,7 @@ CPUS_PER_TASK = 16
 MEM_PER_CPU = '8G'
 PARTITION = 'gpuq'
 GPU_INFO = '--gres=gpu:1'
-NODE_LIST = ''#--nodelist=a03,a04'
-EXCLUDE = ''
+EXCLUDE = 'p04'
 ACCOUNT = 'dbic' #dbic
 
 DATASET_INFO = {
@@ -136,7 +135,7 @@ if __name__ == "__main__":
         for cmd in all_cmds:
             f.write(f"{cmd}\n")
     
-    dsq_base_string = f'dsq_token-fusion'
+    dsq_base_string = f'dsq_{p.dataset}_token-fusion'
     dsq_batch_fn = os.path.join(dsq_dir, dsq_base_string)
     dsq_out_dir = os.path.join(logs_dir, dsq_base_string)
     array_fmt_width = len(str(job_num)) 

@@ -194,6 +194,47 @@ display_pairwise_comparisons(pairwise_comparisons)
 
 ```
 
+### Analysis 2A1 - Chao-Shen Bias Correction
+
+```{r}
+
+entropy_formula <- 'entropy_chao_shen ~ modality + (1|word_index:task)'
+
+# Fit the logistic mixed-effects model
+model <- lmer(entropy_formula, data = df_results)
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
+### Analysis 2A2 - NSB Bias Correction
+
+```{r}
+
+entropy_formula <- 'entropy_nsb ~ modality + (1|word_index:task)'
+
+# Fit the logistic mixed-effects model
+model <- lmer(entropy_formula, data = df_results)
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
 
 ## Analysis 2B - Entropy interaction with prosody
 
@@ -216,6 +257,49 @@ pairwise_comparisons <- emmeans(model, pairwise ~ modality)
 display_pairwise_comparisons(pairwise_comparisons)
 
 ```
+
+### Analysis 2B1 - Chao-Shen Bias Correction
+
+```{r}
+
+entropy_formula <- 'entropy_chao_shen ~ modality * prominence_mean_words5 + (1|word_index:task)'
+
+# Fit the logistic mixed-effects model
+model <- lmer(entropy_formula, data = df_results)
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
+### Analysis 2B2 - NSB Bias Correction
+
+```{r}
+
+entropy_formula <- 'entropy_nsb ~ modality * prominence_mean_words5 + (1|word_index:task)'
+
+# Fit the logistic mixed-effects model
+model <- lmer(entropy_formula, data = df_results)
+
+tab_model(model, show.se=TRUE, show.stat=TRUE, show.r2=TRUE, show.df=TRUE)
+
+
+# Display results of fixed effects
+display_model_summary(model)
+
+# Conduct pairwise comparisons between modalities
+pairwise_comparisons <- emmeans(model, pairwise ~ modality)
+display_pairwise_comparisons(pairwise_comparisons)
+
+```
+
 
 ### Plot the interaction between prominence and entropy
 
@@ -248,7 +332,7 @@ ggplot(preds, aes(x=x, y=predicted, color=group)) +
     y = "Entropy",
     title = "Prosody reduces entropy of prediction distributions")
 
-ggsave(file.path(plots_dir, 'human_entropy-prosody-interaction_new.pdf'), device = "pdf")
+# ggsave(file.path(plots_dir, 'human_entropy-prosody-interaction_new.pdf'), device = "pdf")
 ```
 
 

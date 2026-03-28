@@ -52,3 +52,5 @@ data:
   text_model_name: gpt2
   audio_model_name: wav2vec2
   video_model_name: data2vec
+  context_type: null
+  context_embed_dim: null

@@ -18,6 +18,8 @@ import scipy.special as special
 import torch
 from torch.nn import functional as F
 
+import infomeasure as im
+
 from config import *
 from tommy_utils import nlp
 from preproc_utils import divide_nwp_dataframe, load_model_results
@@ -511,11 +513,23 @@ def get_leakage_stats(df_cleaned_behavior, comparison_modality='text', stat_test
 ###############################################
 
 def get_human_probs(responses):
-    
+
     unique, counts = np.unique(responses, return_counts=True)
     probs = counts / sum(counts)
-    
+
     return probs, unique
+
+def get_corrected_entropies(responses):
+    """Returns bias-corrected entropy estimates (nats) via infomeasure.
+    Uses base='e' (nats) to match scipy.stats.entropy default.
+    Approaches: miller_madow, shrink (James-Stein), nsb, chao_shen.
+    Takes raw discrete samples (list of strings/labels).
+    """
+    approaches = ['miller_madow', 'shrink', 'nsb', 'chao_shen']
+    return {
+        f'entropy_{a}': im.entropy(responses, approach=a, base='e')
+        for a in approaches
+    }
 
 # def strip_punctuation(text):
     
@@ -554,6 +568,10 @@ def analyze_human_results(df_transcript, df_results, word_model_info, window_siz
         'n_predictions',
         'entropy',
         'normalized_entropy',
+        'entropy_miller_madow',
+        'entropy_shrink',
+        'entropy_nsb',
+        'entropy_chao_shen',
         'bert_top_word_accuracy',
         f'{word_model_name}_top_word_accuracy',
         f'{word_model_name}_avg_accuracy',
@@ -625,6 +643,7 @@ def analyze_human_results(df_transcript, df_results, word_model_info, window_siz
         # entropy + entropy normalized by the number of items in the distribution
         entropy = stats.entropy(human_probs)
         normalized_entropy = entropy / np.log(len(human_probs))
+        corrected = get_corrected_entropies(human_responses)
 
         #############################################
         #### Calculate accuracy metrics          ####
@@ -738,7 +757,11 @@ def analyze_human_results(df_transcript, df_results, word_model_info, window_siz
             'top_prob': top_prob,
             'n_predictions': len(unique_words),
             'entropy': entropy,
-            'normalized_entropy': np.nan_to_num(normalized_entropy), 
+            'normalized_entropy': np.nan_to_num(normalized_entropy),
+            'entropy_miller_madow': corrected['entropy_miller_madow'],
+            'entropy_shrink':       corrected['entropy_shrink'],
+            'entropy_nsb':          corrected['entropy_nsb'],
+            'entropy_chao_shen':    corrected['entropy_chao_shen'],
             'bert_top_word_accuracy': bert_similarity,
             f'{word_model_name}_top_word_accuracy': top_word_accuracy,
             f'{word_model_name}_avg_accuracy': np.nanmean(pred_similarity),
@@ -853,11 +876,14 @@ def compare_human_model_distributions(df_human_results, word_model_info, models_
     # Get word model information
     word_model_name, word_model = word_model_info
 
-    # Load the tokenizer 
-    tokenizer, _ = nlp.load_clm_model(
-        model_name='gpt2' if 'whisper' in model_name else model_name, 
-        cache_dir=CACHE_DIR
-    )
+    # Load only the tokenizer (not the full model weights, which can be 100s of GBs)
+    from transformers import AutoTokenizer
+    from tommy_utils.nlp import CLM_MODELS_DICT, MLM_MODELS_DICT
+    _model_key = 'gpt2' if 'whisper' in model_name else model_name
+    _model_path = CLM_MODELS_DICT.get(_model_key, MLM_MODELS_DICT.get(_model_key))
+    tokenizer = AutoTokenizer.from_pretrained(_model_path, cache_dir=CACHE_DIR)
+    if not tokenizer.pad_token:
+        tokenizer.add_special_tokens({'pad_token': '[PAD]'})
 
     df_comparison = pd.DataFrame(columns=[
         'model_name',
@@ -871,6 +897,10 @@ def compare_human_model_distributions(df_human_results, word_model_info, models_
         'human_predictability',
         'human_log_odds_predictability',
         'human_entropy',
+        'human_entropy_miller_madow',
+        'human_entropy_shrink',
+        'human_entropy_nsb',
+        'human_entropy_chao_shen',
         'model_top_word',
         'model_prob',
         'model_predictability',
@@ -948,6 +978,7 @@ def compare_human_model_distributions(df_human_results, word_model_info, models_
 
         # Entropy of human distribution
         human_entropy = stats.entropy(human_dist)
+        human_corrected = get_corrected_entropies(human_responses)
 
         # Find respective human predictability
         human_predictability = sum(np.asarray(human_responses) == ground_truth) / len(human_responses)
@@ -1052,6 +1083,10 @@ def compare_human_model_distributions(df_human_results, word_model_info, models_
             'human_predictability': human_predictability, 
             'human_log_odds_predictability': human_log_odds_predictability.astype(float),
             'human_entropy': human_entropy,
+            'human_entropy_miller_madow': human_corrected['entropy_miller_madow'],
+            'human_entropy_shrink':       human_corrected['entropy_shrink'],
+            'human_entropy_nsb':          human_corrected['entropy_nsb'],
+            'human_entropy_chao_shen':    human_corrected['entropy_chao_shen'],
 
             # Model information
             'model_top_word': model_prediction,

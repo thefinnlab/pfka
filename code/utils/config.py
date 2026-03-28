@@ -1,9 +1,6 @@
 import os, sys
 from huggingface_hub import login
 
-HF_TOKEN = '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'
-login(token=HF_TOKEN)
-
 ## primary directories
 BASE_DIR = '/dartfs/rc/lab/F/FinnLab/tommy/isc_asynchrony_behavior/'
 CACHE_DIR = '/dartfs/rc/lab/F/FinnLab/tommy/models/'
@@ -25,7 +22,7 @@ DSQ_MODULES	 = [
     'module load openmpi',
     'module load workbench/1.50',
     'source /optnfs/common/miniconda3/etc/profile.d/conda.sh',
-    'conda activate asynchrony' # dark matter
+    'conda activate analysis' # analysis
 ]
 
 DSQ_MODULES = ''.join([f'{module}; ' for module in DSQ_MODULES])

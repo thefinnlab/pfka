@@ -8,7 +8,7 @@ DATASET_CONFIG = {
 		'ckpt_path': "token-fusion_wav2vec-data2vec/checkpoints/epoch_013.ckpt",
 		},
 	'voxceleb2': {
-		'ckpt_path': "token-fusion_wav2vec-data2vec/checkpoints/epoch_009.ckpt"
+		'ckpt_path': "token-fusion_wav2vec-data2vec/checkpoints/epoch_008.ckpt"
 	},
 	'avspeech': {
 		'ckpt_path': "token-fusion_wav2vec-data2vec/checkpoints/epoch_006.ckpt"

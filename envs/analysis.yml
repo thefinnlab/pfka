@@ -1,52 +1,86 @@
-name: asynchrony
+name: analysis
 channels:
-  - anaconda
-  - brainiak
   - conda-forge
   - defaults
 dependencies:
-  - python=3.9
-  - pytorch
+  - python=3.11 #=3.9
+
+  # General Packages
+  - setuptools<71
+  - jupyter
+  - numpy<2.0.0 #=1.23
+  - pandas #=1.2.2
+  - regex
+  - tqdm
+  - pip
+
+  # Neuroimaging Packages
   - nibabel
   - nilearn
-  - jupyter
-  - seaborn=0.13.0
-  - gensim
-  - nltk
-  - numpy=1.23
-  - pandas=1.2.2
+
+  # Plotting Packages
   - matplotlib
-  - seaborn==0.13.0
-  - regex
-  - moviepy
-  - mesalib
-  - libiconv
-  - vtk==9.1.0=osmesa_py39h8ab48e2_107
+  - seaborn #=0.13.0
   - joypy
-  - pip
-  - statsmodels
-  - huggingface_hub
-  - transof
-  - transformers>=4.51.0
-  - scikit-learn
+
+  # SurfPlot Packages
+  - vtk>9.4
+
+  # Machine Learning Packages
   - scipy
-  - matplotlib
-  - tqdm
-  - praatio
+  - scikit-learn
+  - pytorch
+  - torchaudio
+  - torchvision
   - einops
+
+  # NLP Packages
+  - nltk
+  - spacy
+  - gensim
+  - huggingface_hub
+  - transformers>=4.51.0,<5.0.0
+  - praatio # For TextGrids
+
+  # Misc
+  - moviepy
+  - statsmodels
+
   - pip:
-    - librosa
-    - torchaudio
-    - torchvision
-    - av
-    - torchlens
-    - neuromaps
-    - brainspace
-    - mergedeep
-    - himalaya
-    - pydub
-    - tensorflow
+    - scikit-image
+    - pymoten
+    - scenedetect # Scene Cuts
+    - infomeasure # Information theory + entropy 
+    
+    # General Packages
     - natsort
     - sentencepiece
     - transformers_stream_generator
     - fasttext-wheel
+
+    # PyTorch Packages
+    - torchcodec
+    - torchlens
+    - open_clip_torch
+
+    # Machine Learning Packages
+    - himalaya
+    - nimfa
+    - slicetca
+
+    # Audio Packages
+    - av
+    - pydub
+    - librosa
+
+    # Neuroimaging Packages
+    - neuromaps
+    - pliers
+    - clarifai
+
+    # Misc Packagesconda
+    - mergedeep
+    - opencv-python
+
+    # Tommy's Packages
+    - git+https://github.com/thefinnlab/tommy_utils.git@main

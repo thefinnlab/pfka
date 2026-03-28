@@ -776,6 +776,7 @@ def load_model_results(model_dir, model_name, task, window_size, top_n):
     
     # load the data, remove nans
     df_model_results = pd.read_csv(results_fn)
+    df_model_results['top_n_predictions'] = df_model_results['top_n_predictions'].astype(object)
     df_model_results.loc[1:, 'top_n_predictions'] = df_model_results.loc[1:, 'top_n_predictions'].apply(safe_eval)
     
     return df_model_results

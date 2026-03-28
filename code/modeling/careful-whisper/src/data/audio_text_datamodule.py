@@ -48,6 +48,9 @@ class AudioTextDataModule(LightningDataModule):
         token_fusion_weights: Optional[List[float]] = None,
         preload: bool = False,  # New preload option
         ckpt_path: str = None,
+        shuffle_context_dims: bool = False,
+        context_type: str = 'audio_features',
+        context_embed_dim: int = 1024,
         batch_size: int = 64,
         num_workers: int = 0,
         pin_memory: bool = False,
@@ -123,12 +126,15 @@ class AudioTextDataModule(LightningDataModule):
             # # else:
             self.train_dataset = AudioTextDataset(
                 data_dir=self.dataset_path,
-                split=self.hparams.train_split, 
+                split=self.hparams.train_split,
                 token_fusion_method=self.hparams.token_fusion_method,
                 token_fusion_weights=self.hparams.token_fusion_weights,
                 metadata_file=metadata_fn,
                 preload=self.hparams.preload,
                 ckpt_path=self.hparams.ckpt_path,
+                shuffle_context_dims=self.hparams.shuffle_context_dims,
+                context_type=self.hparams.context_type,
+                context_embed_dim=self.hparams.context_embed_dim,
             )
 
             # # If specified sample a subset of the data
@@ -154,11 +160,14 @@ class AudioTextDataModule(LightningDataModule):
             # create datasets
             self.val_dataset = AudioTextDataset(
                 data_dir=self.dataset_path,
-                split=self.hparams.val_split, 
+                split=self.hparams.val_split,
                 token_fusion_method=self.hparams.token_fusion_method,
                 token_fusion_weights=self.hparams.token_fusion_weights,
                 preload=self.hparams.preload,
                 ckpt_path=self.hparams.ckpt_path,
+                shuffle_context_dims=self.hparams.shuffle_context_dims,
+                context_type=self.hparams.context_type,
+                context_embed_dim=self.hparams.context_embed_dim,
             )
 
             print (f"Validation samples: {len(self.val_dataset)}", flush=True)
@@ -173,6 +182,9 @@ class AudioTextDataModule(LightningDataModule):
                 token_fusion_weights=self.hparams.token_fusion_weights,
                 preload=self.hparams.preload,
                 ckpt_path=self.hparams.ckpt_path,
+                shuffle_context_dims=self.hparams.shuffle_context_dims,
+                context_type=self.hparams.context_type,
+                context_embed_dim=self.hparams.context_embed_dim,
             )
 
             print (f"Test samples: {len(self.test_dataset)}", flush=True)

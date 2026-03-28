@@ -481,6 +481,9 @@ def plot_all_comparisons(comparison_df, comparison_model, x_axis='true_subset', 
 
     return plt.gcf()
 
+NATS_TO_BITS = np.log2(np.e)  # ≈ 1.44269
+
+
 def remove_df_outliers(df, column, std=1.5):
     """
     Remove outliers from a dataframe based on IQR of a specific column.
